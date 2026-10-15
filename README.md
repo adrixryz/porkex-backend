@@ -44,7 +44,8 @@ inside the URL, never in the code or the schema.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
 | `npm run format` | Prettier |
-| `npm run db:push` | Applies `schema.prisma` to SQLite directly |
+| `npm run db:push` | Applies `schema.prisma` with the Prisma CLI. **Local files only** |
+| `npm run db:apply` | Applies the schema to whatever `DATABASE_URL` points at, including Turso |
 | `npm run db:studio` | Prisma Studio |
 | `npm run db:backup` | Timestamped copy of the database in `prisma/backups/` |
 | `npm run check:currencies` | Fails if the currency list drifts from the frontend |
@@ -119,8 +120,27 @@ is no mocking: assertions go through actual HTTP requests.
   frontend attaches one before the first attempt so a lost response cannot
   duplicate a movement. `@@unique([userId, clientId])` is scoped by user, and a
   `P2002` from a lost race is turned back into the same `200`.
-- There are no Prisma migrations. The schema is applied with `db push`, so
-  changing it and re-running is the intended workflow.
+- There are no Prisma migrations. The schema is applied by pushing it, and
+  `db push` is the intended local workflow.
+- **`prisma db push` cannot target a hosted database.** The Prisma CLI reads
+  the datasource URL itself and its SQLite connector only accepts `file:`, so
+  it rejects a `libsql://` URL with *"the URL must start with the protocol
+  file:"*. The CLI does not go through the driver adapter, so the adapter the
+  app uses makes no difference. For a hosted database use `npm run db:apply`:
+  it asks Prisma to diff the schema against an empty database (pure codegen, no
+  connection needed) and runs the resulting SQL through `@libsql/client`, which
+  does speak `libsql://`.
+- **`db:apply` brings a database up to date with the schema, additively.**
+  - Missing tables and indexes are created.
+  - **Missing columns are added with `ALTER TABLE ... ADD COLUMN`**, so adding a
+    field to a model and redeploying is enough.
+  - Columns that exist in the database but not in the schema are reported and
+    left alone. Nothing is ever dropped.
+  - SQLite cannot add a `NOT NULL` column with no default to a table that
+    already has rows, and it cannot drop or rename columns. When that happens
+    the script stops with the exact statement and the reason, and the data has
+    to be recreated. Give the new field a default (`@default("")`) if it has to
+    be required, or make it optional.
 - Access tokens have no `expiresIn`: a session ends when the user logs out.
 - Weeks start on Monday, matching the frontend.
 - Currency is a display preference. There is no conversion between currencies.
