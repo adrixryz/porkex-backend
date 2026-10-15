@@ -46,6 +46,7 @@ inside the URL, never in the code or the schema.
 | `npm run format` | Prettier |
 | `npm run db:push` | Applies `schema.prisma` with the Prisma CLI. **Local files only** |
 | `npm run db:apply` | Applies the schema to whatever `DATABASE_URL` points at, including Turso |
+| `npm run db:seed` | Fills a test account with six months of realistic data |
 | `npm run db:studio` | Prisma Studio |
 | `npm run db:backup` | Timestamped copy of the database in `prisma/backups/` |
 | `npm run check:currencies` | Fails if the currency list drifts from the frontend |
@@ -99,6 +100,45 @@ Protected (Bearer token required):
 `npm test` boots the real server against a throwaway SQLite database in the
 system temp directory, runs every `*.test.mjs` suite, then tears it down. There
 is no mocking: assertions go through actual HTTP requests.
+
+## Test data
+
+`npm run db:seed` creates an account with six months of history, so the
+dashboard, analytics, category totals and budget bars all have something to show.
+
+```
+seed@porkex.test / porkex123
+```
+
+It generates a monthly salary, the odd freelance invoice, rent and utilities,
+and variable Food / Transport / Entertainment / Shopping spending, plus three
+monthly and two weekly budgets (which land both under and over their limit).
+The random generator is seeded, so the same command always produces the same
+data — "the analytics look wrong" is a real signal instead of noise.
+
+| Variable | Default |
+| --- | --- |
+| `SEED_EMAIL` | `seed@porkex.test` |
+| `SEED_PASSWORD` | `porkex123` |
+| `SEED_NAME` | `Porkex Tester` |
+| `SEED_MONTHS` | `6` |
+| `SEED_CURRENCY` | `USD` |
+
+It refuses to touch an account that already has data, so it cannot quietly
+wipe a real one:
+
+```
+npm run db:seed -- --reset   # wipes and regenerates that account
+```
+
+It writes to whatever `DATABASE_URL` points at, so to fill the hosted database
+run it from your machine with Turso's values in the environment:
+
+```bash
+DATABASE_URL="libsql://porkex-db-xxx.turso.io" TURSO_AUTH_TOKEN="..." npm run db:seed
+```
+
+Only the account named by `SEED_EMAIL` is ever read or written.
 
 ## Notes
 

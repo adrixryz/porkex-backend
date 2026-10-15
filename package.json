@@ -18,6 +18,7 @@
     "test": "node tests/run.mjs",
     "db:push": "prisma db push",
     "db:apply": "node scripts/apply-schema.js",
+    "db:seed": "node scripts/seed.js",
     "db:studio": "prisma studio",
     "db:backup": "node scripts/backup-db.js",
     "check:currencies": "node scripts/check-currencies.js",
