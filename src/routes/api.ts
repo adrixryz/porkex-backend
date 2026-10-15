@@ -1,0 +1,1007 @@
+import { Router } from 'express';
+import type { Prisma } from '@prisma/client';
+import { AuthRequest, authMiddleware } from '../middleware/auth';
+import { prisma } from '../lib/prisma';
+import { isValidCurrency } from '../lib/currencies';
+import { fromCents, toCents, toCentsNonNegative } from '../lib/money';
+
+const router = Router();
+
+// Apply auth middleware to ALL routes in this file
+router.use(authMiddleware);
+
+type TxType = 'INCOME' | 'EXPENSE';
+
+const ALLOWED_MONTHS = [3, 6, 12];
+const ALLOWED_TREND_DAYS = [30, 90];
+const SORT_FIELDS = ['date', 'amount'] as const;
+const DEFAULT_PER_PAGE = 20;
+const MAX_PER_PAGE = 100;
+
+function isValidType(v: unknown): v is TxType {
+  return v === 'INCOME' || v === 'EXPENSE';
+}
+
+function parseCategoryId(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+// Prisma reports a unique constraint violation with this code. Used to turn a
+// lost create race into a successful replay instead of a 500.
+function isUniqueViolation(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === 'P2002';
+}
+
+function cleanText(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : '';
+}
+
+// Every amount that leaves the API is converted from cents exactly once, here.
+// Everything above this line stays in cents.
+function serializeTransaction<T extends { amount: number }>(tx: T) {
+  return { ...tx, amount: fromCents(tx.amount) };
+}
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+function monthKey(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+}
+
+function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function parseIntParam(v: unknown, fallback: number): number {
+  const n = Number.parseInt(String(v ?? ''), 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// End of the current day, so a transaction dated "today" is always accepted.
+function endOfToday(): Date {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+type DateRange = { gte?: Date; lte?: Date };
+
+// Optional date range shared by /transactions and /categories.
+// Returns { error } to answer 400 without repeating the parsing in every route.
+function resolveRange(query: Record<string, unknown>): { range?: DateRange; error?: string } {
+  const range: DateRange = {};
+
+  if (query.from) {
+    const from = new Date(String(query.from));
+    if (isNaN(from.getTime())) return { error: 'Invalid "from" date.' };
+    range.gte = from;
+  }
+
+  if (query.to) {
+    const to = new Date(String(query.to));
+    if (isNaN(to.getTime())) return { error: 'Invalid "to" date.' };
+    range.lte = to;
+  }
+
+  return { range: Object.keys(range).length > 0 ? range : undefined };
+}
+
+// ── DASHBOARD ──────────────────────────────────────────
+router.get('/dashboard', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  try {
+    const transactions = await prisma.transaction.findMany({
+      where: { userId },
+      include: { category: true },
+      // Most recent by its own date first; id breaks ties between same-day entries.
+      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      take: 10
+    });
+
+    const [incomeSum, expenseSum, transactionCount] = await Promise.all([
+      prisma.transaction.aggregate({
+        _sum: { amount: true },
+        where: { type: 'INCOME', userId }
+      }),
+      prisma.transaction.aggregate({
+        _sum: { amount: true },
+        where: { type: 'EXPENSE', userId }
+      }),
+      prisma.transaction.count({ where: { userId } })
+    ]);
+
+    const expensesByCategory = await prisma.transaction.groupBy({
+      by: ['categoryId'],
+      _sum: { amount: true },
+      where: { type: 'EXPENSE', userId }
+    });
+
+    // No N+1: a single categories query plus in-memory mapping.
+    const categories = await prisma.category.findMany({ where: { userId } });
+    const catById = new Map(categories.map(c => [c.id, c]));
+
+    const pieChartData = [];
+    for (const g of expensesByCategory) {
+      const cat = catById.get(g.categoryId);
+      if (cat && g._sum.amount) {
+        pieChartData.push({ label: cat.name, value: fromCents(g._sum.amount), color: cat.color || '#ccc' });
+      }
+    }
+
+    const totalIncome = incomeSum._sum.amount || 0;
+    const totalExpense = expenseSum._sum.amount || 0;
+
+    res.json({
+      globalBalance: fromCents(totalIncome - totalExpense),
+      totalIncome: fromCents(totalIncome),
+      totalExpense: fromCents(totalExpense),
+      transactionCount,
+      recentTransactions: transactions.map(serializeTransaction),
+      pieChartData
+    });
+  } catch (error) {
+    console.error('Failed to load dashboard', error);
+    res.status(500).json({ error: 'Failed to load dashboard' });
+  }
+});
+
+// ── ANALYTICS ──────────────────────────────────────────
+router.get('/analytics', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const months = ALLOWED_MONTHS.includes(Number(req.query.months)) ? Number(req.query.months) : 6;
+  const days = ALLOWED_TREND_DAYS.includes(Number(req.query.days)) ? Number(req.query.days) : 30;
+
+  try {
+    const now = new Date();
+
+    // Window bounds: months drive the buckets, days drive the balance trend.
+    const monthsWindowStart = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+    const trendWindowStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1));
+    trendWindowStart.setHours(0, 0, 0, 0);
+    const windowStart = monthsWindowStart < trendWindowStart ? monthsWindowStart : trendWindowStart;
+
+    const [categories, windowTx, olderIncome, olderExpense] = await Promise.all([
+      prisma.category.findMany({ where: { userId }, select: { id: true, name: true, color: true } }),
+      // Only the rows inside the window are shipped; older ones stay in the DB.
+      prisma.transaction.findMany({
+        where: { userId, date: { gte: windowStart } },
+        select: { amount: true, type: true, date: true, categoryId: true },
+        orderBy: { date: 'asc' }
+      }),
+      // The trend starts with everything before it as opening balance, summed by
+      // the database. Two aggregates because income and expense carry signs.
+      prisma.transaction.aggregate({
+        where: { userId, type: 'INCOME', date: { lt: trendWindowStart } },
+        _sum: { amount: true }
+      }),
+      prisma.transaction.aggregate({
+        where: { userId, type: 'EXPENSE', date: { lt: trendWindowStart } },
+        _sum: { amount: true }
+      })
+    ]);
+
+    const catById = new Map(categories.map(c => [c.id, c]));
+    const openingBalance = (olderIncome._sum.amount || 0) - (olderExpense._sum.amount || 0);
+
+    // Month buckets (income/expense) and day buckets (running balance).
+    const monthBuckets: { key: string; label: string; income: number; expense: number }[] = [];
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      monthBuckets.push({
+        key: monthKey(d),
+        label: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+        income: 0,
+        expense: 0
+      });
+    }
+    const monthIndex = new Map(monthBuckets.map((b, i) => [b.key, i]));
+    const currentIdx = monthBuckets.length - 1;
+    const lastIdx = currentIdx - 1;
+    const currentKey = monthBuckets[currentIdx].key;
+    const lastKey = lastIdx >= 0 ? monthBuckets[lastIdx].key : '';
+
+    // Spending per category for the current and previous month (tops and comparison).
+    const currentByCat = new Map<number, number>();
+    const lastByCat = new Map<number, number>();
+    const netByDay = new Map<string, number>();
+
+    // Single pass: O(n) instead of walking every transaction per bucket.
+    for (const tx of windowTx) {
+      const d = new Date(tx.date);
+      const isIncome = tx.type === 'INCOME';
+      const net = isIncome ? tx.amount : -tx.amount;
+
+      const mi = monthIndex.get(monthKey(d));
+      if (mi !== undefined) {
+        if (isIncome) {
+          monthBuckets[mi].income += tx.amount;
+        } else {
+          monthBuckets[mi].expense += tx.amount;
+          if (monthBuckets[mi].key === currentKey) {
+            currentByCat.set(tx.categoryId, (currentByCat.get(tx.categoryId) || 0) + tx.amount);
+          } else if (monthBuckets[mi].key === lastKey) {
+            lastByCat.set(tx.categoryId, (lastByCat.get(tx.categoryId) || 0) + tx.amount);
+          }
+        }
+      }
+
+      if (d < trendWindowStart) {
+        // Before the trend window but inside the months window: it counts
+        // towards the monthly buckets only, never towards the balance.
+      } else {
+        const dk = dayKey(d);
+        netByDay.set(dk, (netByDay.get(dk) || 0) + net);
+      }
+    }
+
+    const monthlyData = monthBuckets.map((b, i) => {
+      const window = monthBuckets.slice(Math.max(0, i - 2), i + 1);
+      const avgExpense = window.length ? window.reduce((s, x) => s + x.expense, 0) / window.length : 0;
+      return {
+        month: b.label,
+        income: fromCents(b.income),
+        expense: fromCents(b.expense),
+        net: fromCents(b.income - b.expense),
+        avgExpense: fromCents(avgExpense)
+      };
+    });
+
+    const trendData: { date: string; balance: number }[] = [];
+    let balance = openingBalance;
+    for (let i = 0; i < days; i++) {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (days - 1) + i);
+      balance += netByDay.get(dayKey(start)) || 0;
+      trendData.push({
+        date: start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        balance: fromCents(balance)
+      });
+    }
+
+    const current = monthBuckets[currentIdx];
+    const last = lastIdx >= 0 ? monthBuckets[lastIdx] : null;
+
+    let expenseChangePercent = 0;
+    if (last) {
+      if (last.expense > 0) {
+        expenseChangePercent = Math.round(((current.expense - last.expense) / last.expense) * 100);
+      } else if (current.expense > 0) {
+        expenseChangePercent = 100;
+      }
+    }
+
+    const catInfo = (id: number) => ({
+      name: catById.get(id)?.name || 'Uncategorized',
+      color: catById.get(id)?.color || '#5F6368'
+    });
+
+    const topCategories = [...currentByCat.entries()]
+      .map(([catId, value]) => ({
+        ...catInfo(catId),
+        value: fromCents(value),
+        percent: current.expense > 0 ? Math.round((value / current.expense) * 100) : 0
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 3);
+
+    const comparisonIds = new Set([...currentByCat.keys(), ...lastByCat.keys()]);
+    const categoryComparison = [...comparisonIds]
+      .map((catId) => {
+        const cur = currentByCat.get(catId) || 0;
+        const prev = lastByCat.get(catId) || 0;
+        return {
+          ...catInfo(catId),
+          current: fromCents(cur),
+          previous: fromCents(prev),
+          changePercent: prev > 0 ? Math.round(((cur - prev) / prev) * 100) : cur > 0 ? 100 : 0
+        };
+      })
+      .sort((a, b) => b.current - a.current)
+      .slice(0, 8);
+
+    const dayOfMonth = now.getDate();
+
+    res.json({
+      range: { months, days },
+      monthlyData,
+      trendData,
+      topCategories,
+      categoryComparison,
+      insights: {
+        currentMonthIncome: fromCents(current.income),
+        currentMonthExpense: fromCents(current.expense),
+        lastMonthExpense: fromCents(last?.expense || 0),
+        expenseChangePercent,
+        avgDailyExpense: dayOfMonth > 0 ? fromCents(current.expense / dayOfMonth) : 0,
+        savingsRate: current.income > 0
+          ? Math.round(((current.income - current.expense) / current.income) * 100)
+          : 0,
+        topCategories,
+        categoryComparison
+      }
+    });
+  } catch (error) {
+    console.error('Failed to load analytics', error);
+    res.status(500).json({ error: 'Failed to load analytics' });
+  }
+});
+
+// ── TRANSACTIONS ───────────────────────────────────────
+router.get('/transactions', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  try {
+    const q = req.query as Record<string, unknown>;
+    const { range, error } = resolveRange(q);
+    if (error) return res.status(400).json({ error });
+
+    const where: Prisma.TransactionWhereInput = { userId };
+    if (range) where.date = range;
+
+    const type = cleanText(q.type);
+    if (type && type !== 'ALL') {
+      if (!isValidType(type)) return res.status(400).json({ error: 'Type must be INCOME or EXPENSE.' });
+      where.type = type;
+    }
+
+    const categoryId = cleanText(q.categoryId);
+    if (categoryId) {
+      const parsed = parseCategoryId(categoryId);
+      if (parsed === null) return res.status(400).json({ error: 'Invalid categoryId.' });
+      where.categoryId = parsed;
+    }
+
+    let minAmount: number | undefined;
+    if (q.min !== undefined && q.min !== '') {
+      const min = toCentsNonNegative(q.min);
+      if (min === null) return res.status(400).json({ error: 'Invalid "min" amount.' });
+      minAmount = min;
+      where.amount = { ...(where.amount as object), gte: min };
+    }
+    if (q.max !== undefined && q.max !== '') {
+      const max = toCentsNonNegative(q.max);
+      if (max === null) return res.status(400).json({ error: 'Invalid "max" amount.' });
+      // Two contradictory bounds would silently return nothing.
+      if (minAmount !== undefined && max < minAmount) {
+        return res.status(400).json({ error: '"max" must be greater than or equal to "min".' });
+      }
+      where.amount = { ...(where.amount as object), lte: max };
+    }
+
+    const search = cleanText(q.search);
+    if (search) {
+      where.OR = [
+        { description: { contains: search } },
+        { category: { name: { contains: search } } }
+      ];
+    }
+
+    // Default order is by the movement date, newest first; id breaks ties.
+    const sortBy = SORT_FIELDS.includes(q.sortBy as typeof SORT_FIELDS[number]) ? (q.sortBy as 'date' | 'amount') : 'date';
+    const order: Prisma.SortOrder = q.order === 'asc' ? 'asc' : 'desc';
+
+    const requestedPage = Math.max(1, parseIntParam(q.page, 1));
+    const perPage = Math.min(MAX_PER_PAGE, Math.max(1, parseIntParam(q.perPage, DEFAULT_PER_PAGE)));
+
+    const orderBy: Prisma.TransactionOrderByWithRelationInput[] = [
+      { [sortBy]: order },
+      { id: order }
+    ];
+
+    // The count and the page used to be two sequential round trips. They are
+    // independent unless the requested page is past the end, because only then
+    // does the clamped offset change the read.
+    const [total, firstPage] = await Promise.all([
+      prisma.transaction.count({ where }),
+      prisma.transaction.findMany({
+        where,
+        include: { category: true },
+        orderBy,
+        skip: (requestedPage - 1) * perPage,
+        take: perPage
+      })
+    ]);
+
+    // Clamp instead of returning an empty page beyond the last one.
+    const totalPages = Math.max(1, Math.ceil(total / perPage));
+    const page = Math.min(requestedPage, totalPages);
+
+    // Rare: the page asked for does not exist, so re-read at the clamped offset.
+    const items = page === requestedPage
+      ? firstPage
+      : await prisma.transaction.findMany({
+          where,
+          include: { category: true },
+          orderBy,
+          skip: (page - 1) * perPage,
+          take: perPage
+        });
+
+    res.json({
+      items: items.map(serializeTransaction),
+      total,
+      page,
+      perPage,
+      totalPages
+    });
+  } catch (error) {
+    console.error('Failed to fetch transactions', error);
+    res.status(500).json({ error: 'Failed to fetch transactions' });
+  }
+});
+
+// A client-supplied id, used to make a replayed create safe. Arbitrary strings
+// are rejected rather than stored, so the column only ever holds a usable key.
+type ClientIdResult = { ok: true; value: string | null } | { ok: false };
+
+function parseClientId(v: unknown): ClientIdResult {
+  const s = cleanText(v);
+  if (!s) return { ok: true, value: null };
+  if (s.length > 64 || !/^[A-Za-z0-9_-]+$/.test(s)) return { ok: false };
+  return { ok: true, value: s };
+}
+
+async function validateTransactionInput(
+  userId: number,
+  body: { amount: unknown; type: unknown; description: unknown; categoryId: unknown; date?: unknown; clientId?: unknown }
+): Promise<{ error?: string; amount?: number; type?: TxType; description?: string; categoryId?: number; date?: Date; clientId?: string }> {
+  const amount = toCents(body.amount);
+  if (amount === null) return { error: 'Amount must be a number greater than 0.' };
+
+  if (!isValidType(body.type)) return { error: 'Type must be INCOME or EXPENSE.' };
+
+  const description = cleanText(body.description);
+  if (!description) return { error: 'Description is required.' };
+
+  const categoryId = parseCategoryId(body.categoryId);
+  if (categoryId === null) return { error: 'Valid categoryId is required.' };
+
+  const clientId = parseClientId(body.clientId);
+  if (!clientId.ok) {
+    return { error: 'clientId must be up to 64 characters of A-Z, a-z, 0-9, dash or underscore.' };
+  }
+
+  const category = await prisma.category.findFirst({ where: { id: categoryId, userId } });
+  if (!category) return { error: 'Category not found.' };
+
+  if (category.type !== body.type) {
+    return { error: `Category "${category.name}" is ${category.type}, but transaction is ${body.type}.` };
+  }
+
+  // The date is optional: when missing, now() is used (Prisma default).
+  // Future dates are rejected so the balance and the analytics never disagree
+  // about whether a planned movement counts.
+  let date: Date | undefined;
+  if (body.date !== undefined && body.date !== null && body.date !== '') {
+    const parsed = new Date(body.date as string);
+    if (isNaN(parsed.getTime())) return { error: 'Invalid date.' };
+    if (parsed > endOfToday()) return { error: 'Date cannot be in the future.' };
+    date = parsed;
+  }
+
+  return { amount, type: body.type, description, categoryId, date, ...(clientId.value ? { clientId: clientId.value } : {}) };
+}
+
+router.post('/transactions', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+
+  const findByClientId = (clientId: string | null) =>
+    prisma.transaction.findFirst({
+      where: { clientId, userId },
+      include: { category: true }
+    });
+
+  let clientId: string | null = null;
+  try {
+    const v = await validateTransactionInput(userId, req.body);
+    if (v.error) return res.status(400).json({ error: v.error });
+    clientId = v.clientId ?? null;
+
+    // Idempotent replay: the frontend queues writes that fail and sends them
+    // again later, and a create whose response was lost in transit must not
+    // land twice. Answer 200 (not 201) because nothing was created.
+    if (clientId) {
+      const existing = await findByClientId(clientId);
+      if (existing) return res.status(200).json(serializeTransaction(existing));
+    }
+
+    const tx = await prisma.transaction.create({
+      data: {
+        amount: v.amount!,
+        type: v.type!,
+        description: v.description!,
+        categoryId: v.categoryId!,
+        userId,
+        ...(clientId ? { clientId } : {}),
+        ...(v.date ? { date: v.date } : {})
+      },
+      include: { category: true }
+    });
+    res.status(201).json(serializeTransaction(tx));
+  } catch (error) {
+    // Two replays can both pass the lookup above and race to insert. The unique
+    // constraint catches the loser, which is the same situation as a replay
+    // that had already succeeded, so answer with the stored row.
+    if (clientId && isUniqueViolation(error)) {
+      const existing = await findByClientId(clientId);
+      if (existing) return res.status(200).json(serializeTransaction(existing));
+    }
+    console.error('Transaction creation failed.', error);
+    res.status(500).json({ error: 'Transaction creation failed.' });
+  }
+});
+
+router.put('/transactions/:id', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const txId = Number(req.params.id);
+  if (!Number.isInteger(txId) || txId <= 0) {
+    return res.status(400).json({ error: 'Invalid transaction id.' });
+  }
+  try {
+    // Verify ownership
+    const existing = await prisma.transaction.findFirst({ where: { id: txId, userId } });
+    if (!existing) return res.status(404).json({ error: 'Transaction not found.' });
+
+    const v = await validateTransactionInput(userId, req.body);
+    if (v.error) return res.status(400).json({ error: v.error });
+
+    const tx = await prisma.transaction.update({
+      where: { id: txId },
+      // Without a date in the body the existing one is kept (partial PUT on the date field).
+      data: {
+        amount: v.amount!,
+        type: v.type!,
+        description: v.description!,
+        categoryId: v.categoryId!,
+        ...(v.date ? { date: v.date } : {})
+      },
+      include: { category: true }
+    });
+    res.json(serializeTransaction(tx));
+  } catch (error) {
+    console.error('Transaction update failed.', error);
+    res.status(500).json({ error: 'Transaction update failed.' });
+  }
+});
+
+router.delete('/transactions/:id', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const txId = Number(req.params.id);
+  if (!Number.isInteger(txId) || txId <= 0) {
+    return res.status(400).json({ error: 'Invalid transaction id.' });
+  }
+  try {
+    const existing = await prisma.transaction.findFirst({ where: { id: txId, userId } });
+    if (!existing) return res.status(404).json({ error: 'Transaction not found.' });
+
+    await prisma.transaction.delete({ where: { id: txId } });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete failed.', error);
+    res.status(500).json({ error: 'Delete failed.' });
+  }
+});
+
+// ── CATEGORIES ─────────────────────────────────────────
+router.get('/categories', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  try {
+    const { range, error } = resolveRange(req.query as Record<string, unknown>);
+    if (error) return res.status(400).json({ error });
+
+    const catsPromise = prisma.category.findMany({
+      where: { userId },
+      orderBy: { name: 'asc' },
+      // All-time movement count: the UI needs it to know whether deleting
+      // requires a reassignment target, which ignores the selected period.
+      include: { _count: { select: { transactions: true } } }
+    });
+
+    const where: Prisma.TransactionWhereInput = { userId };
+    if (range) where.date = range;
+
+    // Sum and number of movements per category within the same period. The
+    // category list and the grouping are independent, so they run together.
+    const [cats, sums] = await Promise.all([
+      catsPromise,
+      prisma.transaction.groupBy({
+        by: ['categoryId'],
+        where,
+        _sum: { amount: true },
+        _count: { _all: true }
+      })
+    ]);
+
+    const totalByCat = new Map(sums.map(s => [s.categoryId, fromCents(s._sum.amount || 0)]));
+    const countByCat = new Map(sums.map(s => [s.categoryId, s._count._all]));
+
+    res.json(cats.map(c => ({
+      ...c,
+      transactionCount: countByCat.get(c.id) || 0,
+      total: totalByCat.get(c.id) || 0,
+      allTimeCount: c._count.transactions
+    })));
+  } catch (error) {
+    console.error('Failed to fetch categories', error);
+    res.status(500).json({ error: 'Failed to fetch categories' });
+  }
+});
+
+async function isDuplicateCategoryName(userId: number, name: string, excludeId?: number): Promise<boolean> {
+  const cats = await prisma.category.findMany({ where: { userId } });
+  const lower = name.toLowerCase();
+  return cats.some(c => c.name.toLowerCase() === lower && c.id !== excludeId);
+}
+
+router.post('/categories', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const name = cleanText(req.body?.name);
+  const { type, color } = req.body ?? {};
+  if (!name) {
+    return res.status(400).json({ error: 'Category name is required.' });
+  }
+  if (!isValidType(type)) {
+    return res.status(400).json({ error: 'Type must be INCOME or EXPENSE.' });
+  }
+  try {
+    if (await isDuplicateCategoryName(userId, name)) {
+      return res.status(409).json({ error: 'A category with that name already exists.' });
+    }
+    const cat = await prisma.category.create({
+      data: { name, type, color: typeof color === 'string' ? color : null, userId }
+    });
+    res.status(201).json(cat);
+  } catch (error) {
+    console.error('Category creation failed.', error);
+    res.status(500).json({ error: 'Category creation failed.' });
+  }
+});
+
+router.put('/categories/:id', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const catId = Number(req.params.id);
+  if (!Number.isInteger(catId) || catId <= 0) {
+    return res.status(400).json({ error: 'Invalid category id.' });
+  }
+  const name = cleanText(req.body?.name);
+  const { type, color } = req.body ?? {};
+  if (!name) {
+    return res.status(400).json({ error: 'Category name is required.' });
+  }
+  if (!isValidType(type)) {
+    return res.status(400).json({ error: 'Type must be INCOME or EXPENSE.' });
+  }
+  try {
+    const existing = await prisma.category.findFirst({ where: { id: catId, userId } });
+    if (!existing) return res.status(404).json({ error: 'Category not found.' });
+
+    if (await isDuplicateCategoryName(userId, name, catId)) {
+      return res.status(409).json({ error: 'A category with that name already exists.' });
+    }
+
+    // Do not allow changing the type when transactions already reference it.
+    if (existing.type !== type) {
+      const txCount = await prisma.transaction.count({ where: { categoryId: catId, userId } });
+      if (txCount > 0) {
+        return res.status(409).json({ error: 'Cannot change type: category has existing transactions.' });
+      }
+    }
+
+    const cat = await prisma.category.update({
+      where: { id: catId },
+      data: { name, type, color: typeof color === 'string' ? color : existing.color }
+    });
+    res.json(cat);
+  } catch (error) {
+    console.error('Category update failed.', error);
+    res.status(500).json({ error: 'Category update failed.' });
+  }
+});
+
+router.delete('/categories/:id', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const catId = Number(req.params.id);
+  if (!Number.isInteger(catId) || catId <= 0) {
+    return res.status(400).json({ error: 'Invalid category id.' });
+  }
+  try {
+    const existing = await prisma.category.findFirst({ where: { id: catId, userId } });
+    if (!existing) return res.status(404).json({ error: 'Category not found.' });
+
+    const txCount = await prisma.transaction.count({ where: { categoryId: catId, userId } });
+    if (txCount === 0) {
+      await prisma.category.delete({ where: { id: catId } });
+      return res.json({ success: true, moved: 0 });
+    }
+
+    // With movements a target category is required; without it the request is rejected.
+    const rawTarget = (req.query.reassignTo ?? req.body?.reassignTo);
+    if (rawTarget === undefined || rawTarget === null || rawTarget === '') {
+      return res.status(409).json({
+        error: 'Cannot delete category with existing transactions.',
+        needsReassignment: true,
+        transactionCount: txCount
+      });
+    }
+
+    const targetId = parseCategoryId(rawTarget);
+    if (targetId === null) {
+      return res.status(400).json({ error: 'Invalid reassignment target category.' });
+    }
+    if (targetId === catId) {
+      return res.status(400).json({ error: 'Cannot reassign transactions to the same category.' });
+    }
+
+    const target = await prisma.category.findFirst({ where: { id: targetId, userId } });
+    if (!target) return res.status(404).json({ error: 'Target category not found.' });
+    if (target.type !== existing.type) {
+      return res.status(400).json({
+        error: `Target category "${target.name}" is ${target.type}, but "${existing.name}" is ${existing.type}.`
+      });
+    }
+
+    await prisma.$transaction([
+      prisma.transaction.updateMany({ where: { categoryId: catId, userId }, data: { categoryId: targetId } }),
+      prisma.category.delete({ where: { id: catId } })
+    ]);
+
+    res.json({ success: true, moved: txCount, reassignedTo: target.name });
+  } catch (error) {
+    console.error('Delete failed.', error);
+    res.status(500).json({ error: 'Delete failed.' });
+  }
+});
+
+// ── BUDGETS ────────────────────────────────────────────
+const BUDGET_PERIODS = ['WEEK', 'MONTH'] as const;
+type BudgetPeriod = (typeof BUDGET_PERIODS)[number];
+
+// The window a budget covers. Weeks start on Monday, matching the frontend.
+function budgetRange(period: BudgetPeriod): { from: Date; to: Date } {
+  const now = new Date();
+  if (period === 'WEEK') {
+    const from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    from.setDate(from.getDate() - ((from.getDay() + 6) % 7));
+    const to = new Date(from);
+    to.setDate(to.getDate() + 6);
+    to.setHours(23, 59, 59, 999);
+    return { from, to };
+  }
+  return {
+    from: new Date(now.getFullYear(), now.getMonth(), 1),
+    to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+  };
+}
+
+function parseBudgetPeriod(v: unknown): BudgetPeriod | null {
+  return BUDGET_PERIODS.includes(String(v).toUpperCase() as BudgetPeriod)
+    ? (String(v).toUpperCase() as BudgetPeriod)
+    : null;
+}
+
+router.get('/budgets', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const requested = req.query.period ? parseBudgetPeriod(req.query.period) : null;
+  if (req.query.period && !requested) {
+    return res.status(400).json({ error: 'Period must be WEEK or MONTH.' });
+  }
+
+  try {
+    // No period filter means both, so each budget is measured on its own cycle.
+    const budgets = await prisma.budget.findMany({
+      where: requested ? { userId, period: requested } : { userId },
+      include: { category: { select: { id: true, name: true, color: true, type: true } } },
+      orderBy: { id: 'asc' }
+    });
+
+    // A WEEK and a MONTH budget for the same category need different sums, so
+    // spending is grouped once per period present in the list.
+    const periods = [...new Set(budgets.map(b => b.period as BudgetPeriod))];
+    const spentByPeriod = new Map<BudgetPeriod, Map<number, number>>();
+
+    for (const period of periods) {
+      const window = budgetRange(period);
+      const grouped = await prisma.transaction.groupBy({
+        by: ['categoryId'],
+        where: { userId, date: { gte: window.from, lte: window.to } },
+        _sum: { amount: true }
+      });
+      spentByPeriod.set(period, new Map(grouped.map(g => [g.categoryId, g._sum.amount || 0])));
+    }
+
+    const spentFor = (period: BudgetPeriod, categoryId: number): number =>
+      spentByPeriod.get(period)?.get(categoryId) ?? 0;
+
+    const payload = budgets.map(b => {
+      const period = b.period as BudgetPeriod;
+      const spent = spentFor(period, b.categoryId);
+      return {
+        id: b.id,
+        categoryId: b.categoryId,
+        amount: fromCents(b.amount),
+        period: b.period,
+        spent: fromCents(spent),
+        remaining: fromCents(b.amount - spent),
+        usagePercent: b.amount > 0 ? Math.round((spent / b.amount) * 100) : 0,
+        overBudget: spent > b.amount,
+        category: b.category
+      };
+    });
+
+    // Totals are grouped by period on purpose: a WEEK and a MONTH budget on the
+    // same category cover the same movements, so summing them all would count twice.
+    // Summed over the raw rows so the arithmetic stays in exact cents.
+    const totals = periods.map(period => {
+      const rows = budgets.filter(b => b.period === period);
+      const amount = rows.reduce((s, b) => s + b.amount, 0);
+      const spent = rows.reduce((s, b) => s + spentFor(period, b.categoryId), 0);
+      return {
+        period,
+        amount: fromCents(amount),
+        spent: fromCents(spent),
+        // Any single budget over its limit flags the period, not just the aggregate.
+        overBudget: rows.some(b => spentFor(period, b.categoryId) > b.amount),
+        count: rows.length
+      };
+    });
+
+    res.json({ budgets: payload, totals });
+  } catch (error) {
+    console.error('Failed to fetch budgets', error);
+    res.status(500).json({ error: 'Failed to fetch budgets' });
+  }
+});
+
+router.post('/budgets', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const amount = toCents(req.body?.amount);
+  if (amount === null) {
+    return res.status(400).json({ error: 'Amount must be a number greater than 0.' });
+  }
+
+  const period = parseBudgetPeriod(req.body?.period);
+  if (!period) {
+    return res.status(400).json({ error: 'Period must be WEEK or MONTH.' });
+  }
+
+  const categoryId = parseCategoryId(req.body?.categoryId);
+  if (categoryId === null) {
+    return res.status(400).json({ error: 'Valid categoryId is required.' });
+  }
+
+  try {
+    const category = await prisma.category.findFirst({ where: { id: categoryId, userId } });
+    if (!category) return res.status(404).json({ error: 'Category not found.' });
+
+    const existing = await prisma.budget.findFirst({ where: { userId, categoryId, period } });
+    if (existing) {
+      return res.status(409).json({ error: 'This category already has a budget for that period.' });
+    }
+
+    const budget = await prisma.budget.create({
+      data: { userId, categoryId, amount, period },
+      include: { category: { select: { id: true, name: true, color: true, type: true } } }
+    });
+    res.status(201).json({ ...budget, amount: fromCents(budget.amount) });
+  } catch (error) {
+    console.error('Budget creation failed.', error);
+    res.status(500).json({ error: 'Budget creation failed.' });
+  }
+});
+
+router.put('/budgets/:id', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const budgetId = Number(req.params.id);
+  if (!Number.isInteger(budgetId) || budgetId <= 0) {
+    return res.status(400).json({ error: 'Invalid budget id.' });
+  }
+
+  const amount = toCents(req.body?.amount);
+  if (amount === null) {
+    return res.status(400).json({ error: 'Amount must be a number greater than 0.' });
+  }
+
+  const period = parseBudgetPeriod(req.body?.period);
+  if (!period) {
+    return res.status(400).json({ error: 'Period must be WEEK or MONTH.' });
+  }
+
+  try {
+    const existing = await prisma.budget.findFirst({ where: { id: budgetId, userId } });
+    if (!existing) return res.status(404).json({ error: 'Budget not found.' });
+
+    const taken = await prisma.budget.findFirst({
+      where: { userId, categoryId: existing.categoryId, period, id: { not: budgetId } }
+    });
+    if (taken) {
+      return res.status(409).json({ error: 'This category already has a budget for that period.' });
+    }
+
+    const budget = await prisma.budget.update({
+      where: { id: budgetId },
+      data: { amount, period },
+      include: { category: { select: { id: true, name: true, color: true, type: true } } }
+    });
+    res.json({ ...budget, amount: fromCents(budget.amount) });
+  } catch (error) {
+    console.error('Budget update failed.', error);
+    res.status(500).json({ error: 'Budget update failed.' });
+  }
+});
+
+router.delete('/budgets/:id', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const budgetId = Number(req.params.id);
+  if (!Number.isInteger(budgetId) || budgetId <= 0) {
+    return res.status(400).json({ error: 'Invalid budget id.' });
+  }
+  try {
+    const existing = await prisma.budget.findFirst({ where: { id: budgetId, userId } });
+    if (!existing) return res.status(404).json({ error: 'Budget not found.' });
+
+    await prisma.budget.delete({ where: { id: budgetId } });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete failed.', error);
+    res.status(500).json({ error: 'Delete failed.' });
+  }
+});
+
+// ── USER PROFILE ───────────────────────────────────────
+const PROFILE_SELECT = { id: true, name: true, email: true, currency: true, createdAt: true } as const;
+
+router.get('/profile', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: PROFILE_SELECT
+    });
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    res.json(user);
+  } catch (error) {
+    console.error('Failed to fetch profile.', error);
+    res.status(500).json({ error: 'Failed to fetch profile.' });
+  }
+});
+
+router.put('/profile', async (req: AuthRequest, res) => {
+  const userId = req.userId!;
+  const data: { name?: string; currency?: string } = {};
+
+  // Both fields are optional, so the client can update one without sending the other.
+  if (req.body?.name !== undefined) {
+    const name = cleanText(req.body.name);
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required.' });
+    }
+    data.name = name;
+  }
+
+  if (req.body?.currency !== undefined) {
+    if (!isValidCurrency(req.body.currency)) {
+      return res.status(400).json({ error: 'Unsupported currency code.' });
+    }
+    data.currency = req.body.currency;
+  }
+
+  if (Object.keys(data).length === 0) {
+    return res.status(400).json({ error: 'Nothing to update.' });
+  }
+
+  try {
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data,
+      select: PROFILE_SELECT
+    });
+    res.json(user);
+  } catch (error) {
+    console.error('Profile update failed.', error);
+    res.status(500).json({ error: 'Profile update failed.' });
+  }
+});
+
+export default router;

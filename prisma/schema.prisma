@@ -1,0 +1,82 @@
+generator client {
+  provider        = "prisma-client-js"
+  // Lets the app talk to the database through a driver adapter, which is what
+  // makes a hosted libSQL/Turso URL work with the same schema. See src/lib/prisma.ts.
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  name         String
+  email        String        @unique
+  password     String
+  currency     String        @default("USD")
+  transactions Transaction[]
+  categories   Category[]
+  budgets      Budget[]
+  createdAt    DateTime      @default(now())
+}
+
+model Category {
+  id           Int           @id @default(autoincrement())
+  name         String
+  type         String
+  color        String?
+  userId       Int
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+// Monetary amounts are stored as whole minor units (cents) in an Int column.
+// SQLite has no exact decimal type: a Prisma Decimal is stored as REAL, i.e. the
+// same lossy double a Float would use. Only an integer keeps sums exact.
+
+// A spending limit for one category, repeated every WEEK or MONTH.
+model Budget {
+  id         Int      @id @default(autoincrement())
+  categoryId Int
+  // A spending limit is a property of its category, so it goes away with it.
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id])
+  amount     Int
+  period     String   @default("MONTH")
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, categoryId, period])
+  @@index([userId, period])
+}
+
+model Transaction {
+  id     Int    @id @default(autoincrement())
+  amount Int
+  type   String
+  // Set by the client so a retried write cannot create a duplicate: the
+  // frontend queues failed mutations and replays them, and a response lost in
+  // transit must not turn into two identical movements. Null for anything
+  // created without a client (tests, seed data).
+  clientId String?
+  description String
+  date        DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  categoryId  Int
+  category    Category  @relation(fields: [categoryId], references: [id])
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, date])
+  @@index([categoryId])
+  // Scoped by user: two accounts may independently use the same clientId, which
+  // matches how everything else in this schema is owned. NULLs are distinct in
+  // both SQLite and Postgres, so many client-less rows coexist.
+  @@unique([userId, clientId])
+}
