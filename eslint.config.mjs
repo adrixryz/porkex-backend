@@ -37,7 +37,13 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'commonjs',
-      globals: { process: 'readonly', console: 'readonly', require: 'readonly', __dirname: 'readonly', module: 'writable' }
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        require: 'readonly',
+        __dirname: 'readonly',
+        module: 'writable'
+      }
     },
     rules: {
       '@typescript-eslint/no-require-imports': 'off'

@@ -58,14 +58,14 @@ function makeRandom(seed) {
 const random = makeRandom(20240615)
 const between = (min, max) => min + random() * (max - min)
 const intBetween = (min, max) => Math.floor(between(min, max + 1))
-const pick = (list) => list[Math.floor(random() * list.length)]
+const pick = list => list[Math.floor(random() * list.length)]
 
 // Amounts live in the database as whole cents.
-const toCents = (amount) => Math.round(amount * 100)
+const toCents = amount => Math.round(amount * 100)
 
 const day = new Date()
 day.setHours(12, 0, 0, 0)
-const atNoon = (d) => {
+const atNoon = d => {
   const copy = new Date(d)
   copy.setHours(12, 0, 0, 0)
   return copy
@@ -74,8 +74,16 @@ const atNoon = (d) => {
 // Repeating descriptions keep the search box in TransactionsView meaningful.
 const DESCRIPTIONS = {
   Food: [
-    'Supermarket', 'Bakery', 'Coffee', 'Lunch out', 'Groceries', 'Dinner',
-    'Farmers market', 'Takeaway', 'Breakfast', 'Snacks'
+    'Supermarket',
+    'Bakery',
+    'Coffee',
+    'Lunch out',
+    'Groceries',
+    'Dinner',
+    'Farmers market',
+    'Takeaway',
+    'Breakfast',
+    'Snacks'
   ],
   Transport: ['Bus fare', 'Metro card', 'Taxi', 'Fuel', 'Parking', 'Bike repair'],
   Entertainment: ['Cinema', 'Concert', 'Streaming', 'Books', 'Museum', 'Board game'],
@@ -122,8 +130,8 @@ function buildTransactions(categoriesByName, startDate) {
     const monthStart = new Date(startDate.getFullYear(), startDate.getMonth() + m, 1)
     // Never past today: the API rejects future dates and the analytics window
     // ends now anyway.
-    const isCurrentMonth = monthStart.getMonth() === day.getMonth() &&
-      monthStart.getFullYear() === day.getFullYear()
+    const isCurrentMonth =
+      monthStart.getMonth() === day.getMonth() && monthStart.getFullYear() === day.getFullYear()
     const lastDay = isCurrentMonth
       ? day.getDate()
       : new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate()
@@ -194,7 +202,9 @@ async function main() {
   const startDate = new Date(day.getFullYear(), day.getMonth() - (CONFIG.months - 1), 1)
 
   console.log(`Seeding ${CONFIG.email} with ${CONFIG.months} months of data`)
-  console.log(`  window: ${startDate.toISOString().slice(0, 10)} -> ${day.toISOString().slice(0, 10)}`)
+  console.log(
+    `  window: ${startDate.toISOString().slice(0, 10)} -> ${day.toISOString().slice(0, 10)}`
+  )
 
   const existing = await prisma.user.findUnique({ where: { email: CONFIG.email } })
   if (existing) {
@@ -232,7 +242,9 @@ async function main() {
   }
   console.log(`  ${transactions.length} transactions`)
 
-  await prisma.budget.createMany({ data: buildBudgets(byName).map(b => ({ ...b, userId: user.id })) })
+  await prisma.budget.createMany({
+    data: buildBudgets(byName).map(b => ({ ...b, userId: user.id }))
+  })
   console.log('  5 budgets (3 monthly, 2 weekly)')
 
   const spent = transactions.filter(t => t.type === 'EXPENSE').reduce((s, t) => s + t.amount, 0)

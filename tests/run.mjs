@@ -6,7 +6,9 @@ import { spawn } from 'node:child_process'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-const files = readdirSync(HERE).filter(f => f.endsWith('.test.mjs')).sort()
+const files = readdirSync(HERE)
+  .filter(f => f.endsWith('.test.mjs'))
+  .sort()
 
 if (files.length === 0) {
   console.error('No test files found.')

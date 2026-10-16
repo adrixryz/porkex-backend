@@ -1,16 +1,21 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import type { NextFunction, Request, Response } from 'express';
-import apiRoutes from './routes/api';
-import authRoutes from './routes/auth';
-import { assertJwtSecretIsConfigured } from './middleware/auth';
+import 'dotenv/config'
+import express from 'express'
+import cors from 'cors'
+import type { NextFunction, Request, Response } from 'express'
+import apiRoutes from './routes/api'
+import authRoutes from './routes/auth'
+import { assertJwtSecretIsConfigured } from './middleware/auth'
+import { apiLimiter, authLimiter } from './middleware/rateLimit'
 
-const app = express();
-const port = process.env.PORT || 3000;
+const app = express()
+const port = process.env.PORT || 3000
 
 // dotenv has run by now, so the secret can be validated before the port opens.
-assertJwtSecretIsConfigured();
+assertJwtSecretIsConfigured()
+
+// The app runs behind a single reverse proxy (Render). Trusting one hop is what
+// makes req.ip the real client address, which the rate limiters key on.
+app.set('trust proxy', 1)
 
 /**
  * Which frontends may call this API, as a comma separated list of origins:
@@ -25,8 +30,8 @@ assertJwtSecretIsConfigured();
  */
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? '')
   .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+  .map(origin => origin.trim())
+  .filter(Boolean)
 
 if (CORS_ORIGINS.length > 0) {
   app.use(
@@ -39,32 +44,59 @@ if (CORS_ORIGINS.length > 0) {
       allowedHeaders: ['Content-Type', 'Authorization'],
       maxAge: 86400
     })
-  );
+  )
 } else {
-  console.log('CORS_ORIGINS is not set: no cross-origin access allowed (fine for development).');
+  console.log('CORS_ORIGINS is not set: no cross-origin access allowed (fine for development).')
 }
 
-app.use(express.json());
+app.use(express.json())
 
-// Public routes (no auth required)
-app.use('/auth', authRoutes);
+// Public routes (no auth required). The stricter limiter sits on /auth only:
+// a brute-force attack targets those two endpoints, and every other request
+// already needs a valid token.
+app.use('/auth', authLimiter, authRoutes)
 
 // Protected routes (auth required - middleware is applied inside api.ts)
-app.use('/api', apiRoutes);
+app.use('/api', apiLimiter, apiRoutes)
 
 // 404 for unknown routes (avoids empty HTML responses from the API)
 app.use((_req, res) => {
-  res.status(404).json({ error: 'Not found.' });
-});
+  res.status(404).json({ error: 'Not found.' })
+})
 
 // Last resort handler. Without this, express.json() parse failures end up in the
 // default handler and the client receives an HTML body instead of JSON.
 // Express detects an error handler by its arity, so _next must stay declared.
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error.' });
-});
+app.use(
+  (
+    err: Error & { status?: number; statusCode?: number; type?: string },
+    _req: Request,
+    res: Response,
+    _next: NextFunction
+  ) => {
+    // express.json() reports a malformed body as a 400 with entity.parse.failed;
+    // passing that status through keeps the client's error path meaningful
+    // instead of turning a bad request into a server error.
+    const status =
+      typeof err.status === 'number'
+        ? err.status
+        : typeof err.statusCode === 'number'
+          ? err.statusCode
+          : 500
+
+    if (status >= 500) {
+      console.error('Unhandled error:', err)
+      return res.status(status).json({ error: 'Internal server error.' })
+    }
+
+    const message =
+      err.type === 'entity.parse.failed'
+        ? 'Invalid JSON in request body.'
+        : err.message || 'Request failed.'
+    res.status(status).json({ error: message })
+  }
+)
 
 app.listen(port, () => {
-  console.log(`🐷 Porkex API running at http://localhost:${port}`);
-});
+  console.log(`🐷 Porkex API running at http://localhost:${port}`)
+})

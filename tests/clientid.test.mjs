@@ -5,7 +5,11 @@ import { withServer } from './helpers.mjs'
 // twice: the client sends a clientId and the server answers with the record
 // it already created.
 await withServer('clientid', async ({ call, check, state }) => {
-  let r = await call('POST', '/auth/register', { name: 'Idem', email: 'i@i.com', password: 'secret1' })
+  let r = await call('POST', '/auth/register', {
+    name: 'Idem',
+    email: 'i@i.com',
+    password: 'secret1'
+  })
   check('registro', r.status === 201, JSON.stringify(r.data).slice(0, 60))
   state.token = r.data.token
 
@@ -28,7 +32,11 @@ await withServer('clientid', async ({ call, check, state }) => {
   // ── the replay returns the same row, not a new one ──
   r = await call('POST', '/api/transactions', payload)
   check('segundo POST → 200 (no recreado)', r.status === 200, `status=${r.status}`)
-  check('devuelve la misma transaccion', r.data.id === firstId, `id=${r.data.id} esperado=${firstId}`)
+  check(
+    'devuelve la misma transaccion',
+    r.data.id === firstId,
+    `id=${r.data.id} esperado=${firstId}`
+  )
   check('el importe no cambia', r.data.amount === 12.34, `amount=${r.data.amount}`)
 
   // ── a third replay, plus an independent id, to be sure ──
@@ -39,9 +47,18 @@ await withServer('clientid', async ({ call, check, state }) => {
   check('3 reintentos + 1 nuevo = 2 filas', r.data.total === 2, `total=${r.data.total}`)
 
   // ── without clientId nothing is deduped: the old behaviour ──
-  r = await call('POST', '/api/transactions', { amount: 5, type: 'EXPENSE', description: 'sin clientId', categoryId: food.id })
+  r = await call('POST', '/api/transactions', {
+    amount: 5,
+    type: 'EXPENSE',
+    description: 'sin clientId',
+    categoryId: food.id
+  })
   check('POST sin clientId → 201', r.status === 201, `status=${r.status}`)
-  check('el clientId viene vacio', r.data.clientId === null, `clientId=${JSON.stringify(r.data.clientId)}`)
+  check(
+    'el clientId viene vacio',
+    r.data.clientId === null,
+    `clientId=${JSON.stringify(r.data.clientId)}`
+  )
 
   r = await call('GET', '/api/transactions?search=sin clientId')
   check('varias filas con clientId NULL conviven', r.data.total === 1, `total=${r.data.total}`)
@@ -54,7 +71,11 @@ await withServer('clientid', async ({ call, check, state }) => {
   check('clientId demasiado largo → 400', r.status === 400, r.data?.error)
 
   r = await call('POST', '/api/transactions', { ...payload, clientId: '' })
-  check('clientId vacio se ignora, no es error', r.status === 201 || r.status === 200, `status=${r.status}`)
+  check(
+    'clientId vacio se ignora, no es error',
+    r.status === 201 || r.status === 200,
+    `status=${r.status}`
+  )
 
   // ── ownership: another user cannot claim or read someone else's id ──
   r = await call('POST', '/auth/register', { name: 'Otro', email: 'o@o.com', password: 'secret1' })

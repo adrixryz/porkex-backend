@@ -1,6 +1,6 @@
-import { PrismaClient } from '@prisma/client';
-import { PrismaLibSQL } from '@prisma/adapter-libsql';
-import { createClient } from '@libsql/client';
+import { PrismaClient } from '@prisma/client'
+import { PrismaLibSQL } from '@prisma/adapter-libsql'
+import { createClient } from '@libsql/client'
 
 // The database is reached through the libSQL driver adapter, which lets the same
 // schema talk to a local file in development and to a hosted Turso database in
@@ -16,24 +16,24 @@ import { createClient } from '@libsql/client';
 // TURSO_AUTH_TOKEN is only present for a hosted database. Local files and the
 // throwaway databases the tests create do not have one, so it stays optional.
 function createAdapter() {
-  const url = process.env.DATABASE_URL;
+  const url = process.env.DATABASE_URL
   if (!url) {
     throw new Error(
       'DATABASE_URL is not set. Copy .env.example to .env and set it to ' +
-      'file:./prisma/dev.db for local development, or the libsql:// URL for Turso.'
-    );
+        'file:./prisma/dev.db for local development, or the libsql:// URL for Turso.'
+    )
   }
 
-  const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = authToken ? createClient({ url, authToken }) : createClient({ url });
-  return new PrismaLibSQL(client);
+  const authToken = process.env.TURSO_AUTH_TOKEN
+  const client = authToken ? createClient({ url, authToken }) : createClient({ url })
+  return new PrismaLibSQL(client)
 }
 
 // Singleton: avoids multiple connections in dev (nodemon/ts-node reload modules).
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 
-export const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter: createAdapter() });
+export const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter: createAdapter() })
 
 if (!globalForPrisma.prisma) {
-  globalForPrisma.prisma = prisma;
+  globalForPrisma.prisma = prisma
 }

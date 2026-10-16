@@ -1,0 +1,4 @@
+# Keep every file in the repository LF, whatever the platform that committed
+# it. Prettier is configured with endOfLine: "lf", so a CRLF checkout on
+# Windows made `npm run format:check` fail without any real difference.
+* text=auto eol=lf

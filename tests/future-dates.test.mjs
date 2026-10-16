@@ -1,9 +1,12 @@
-
 import { withServer } from './helpers.mjs'
-const iso = (y, m, d) => new Date(y, m - 1, d, 12, 0, 0).toISOString()
 
-await withServer('future-dates', async ({ call, check, results, state }) => {
+// Dates are calendar days: the client sends 'YYYY-MM-DD' and the server stores
+// UTC midnight of that day. The tests mirror that, using the local calendar day
+// (what the browser would send).
+const pad2 = n => String(n).padStart(2, '0')
+const localDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 
+await withServer('future-dates', async ({ call, check, state }) => {
   let r = await call('POST', '/auth/register', { name: 'F', email: 'f@f.com', password: 'secret1' })
   state.token = r.data.token
   const cats = (await call('GET', '/api/categories')).data
@@ -11,62 +14,138 @@ await withServer('future-dates', async ({ call, check, results, state }) => {
   const income = cats.find(c => c.type === 'INCOME')
 
   const today = new Date()
-  const y = today.getFullYear(), m = today.getMonth() + 1, day = today.getDate()
+  const todayDay = localDay(today)
 
-  // â”€â”€ fechas futuras â”€â”€
-  r = await call('POST', '/api/transactions', { amount: 10, type: 'EXPENSE', description: 'hoy', categoryId: expense.id, date: iso(y, m, day) })
+  // ── fechas futuras ──
+  r = await call('POST', '/api/transactions', {
+    amount: 10,
+    type: 'EXPENSE',
+    description: 'hoy',
+    categoryId: expense.id,
+    date: todayDay
+  })
   check('hoy se acepta', r.status === 201, r.data?.error)
+  check(
+    'la fecha queda como medianoche UTC del día',
+    r.data?.date === `${todayDay}T00:00:00.000Z`,
+    r.data?.date
+  )
 
-  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
-  r = await call('POST', '/api/transactions', { amount: 10, type: 'EXPENSE', description: 'manana', categoryId: expense.id, date: tomorrow.toISOString() })
-  check('manana â†’ 400', r.status === 400, r.data?.error)
-  check('el mensaje explica el motivo', r.data?.error === 'Date cannot be in the future.', r.data?.error)
+  // The guard allows up to UTC today + 1 day so a client in any timezone fits;
+  // +3 days is in the future everywhere.
+  const in3days = new Date(today)
+  in3days.setDate(in3days.getDate() + 3)
+  r = await call('POST', '/api/transactions', {
+    amount: 10,
+    type: 'EXPENSE',
+    description: 'en 3 dias',
+    categoryId: expense.id,
+    date: localDay(in3days)
+  })
+  check('en 3 dias → 400', r.status === 400, r.data?.error)
+  check(
+    'el mensaje explica el motivo',
+    r.data?.error === 'Date cannot be in the future.',
+    r.data?.error
+  )
 
-  const in2days = new Date(today); in2days.setDate(in2days.getDate() + 2)
-  r = await call('POST', '/api/transactions', { amount: 10, type: 'EXPENSE', description: 'dentro de 2 dias', categoryId: expense.id, date: in2days.toISOString() })
-  check('dentro de 2 dias â†’ 400 (es futuro)', r.status === 400, r.data?.error)
+  // A full ISO timestamp (an older queued write) still works, and is
+  // normalized to the UTC calendar day it falls on.
+  const earlierToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12, 5)
+  r = await call('POST', '/api/transactions', {
+    amount: 10,
+    type: 'EXPENSE',
+    description: 'hoy mediodia',
+    categoryId: expense.id,
+    date: earlierToday.toISOString()
+  })
+  check('ISO de hoy → 201', r.status === 201, r.data?.error)
+  check(
+    'se normaliza a medianoche UTC',
+    (r.data?.date || '').endsWith('T00:00:00.000Z'),
+    r.data?.date
+  )
 
-  // Note: any time TODAY is accepted, not just the past hours.
-  const earlierToday = new Date(today); earlierToday.setHours(0, 5, 0, 0)
-  r = await call('POST', '/api/transactions', { amount: 10, type: 'EXPENSE', description: 'hoy madrugada', categoryId: expense.id, date: earlierToday.toISOString() })
-  check('hoy a las 00:05 â†’ 201', r.status === 201, r.data?.error)
-
-  r = await call('PUT', `/api/transactions/1`, { amount: 10, type: 'EXPENSE', description: 'hoy', categoryId: expense.id, date: iso(y, m, day) })
+  r = await call('PUT', '/api/transactions/1', {
+    amount: 10,
+    type: 'EXPENSE',
+    description: 'hoy',
+    categoryId: expense.id,
+    date: todayDay
+  })
   check('PUT con fecha de hoy sigue permitido', r.status === 200, r.data?.error)
 
-  // â”€â”€ el saldo de la analÃ­tica cuadra con el total real â”€â”€
-  const lastMonth = new Date(today); lastMonth.setMonth(lastMonth.getMonth() - 1)
-  await call('POST', '/api/transactions', { amount: 100, type: 'INCOME', description: 'sueldo viejo', categoryId: income.id, date: iso(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 10) })
-  await call('POST', '/api/transactions', { amount: 40, type: 'EXPENSE', description: 'gasto viejo', categoryId: expense.id, date: iso(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 12) })
-  await call('POST', '/api/transactions', { amount: 10, type: 'EXPENSE', description: 'gasto de hoy', categoryId: expense.id, date: iso(y, m, day) })
+  // ── el saldo de la analítica cuadra con el total real ──
+  const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 10)
+  await call('POST', '/api/transactions', {
+    amount: 100,
+    type: 'INCOME',
+    description: 'sueldo viejo',
+    categoryId: income.id,
+    date: localDay(lastMonth)
+  })
+  await call('POST', '/api/transactions', {
+    amount: 40,
+    type: 'EXPENSE',
+    description: 'gasto viejo',
+    categoryId: expense.id,
+    date: localDay(lastMonth)
+  })
+  await call('POST', '/api/transactions', {
+    amount: 10,
+    type: 'EXPENSE',
+    description: 'gasto de hoy',
+    categoryId: expense.id,
+    date: todayDay
+  })
 
-  r = await call('GET', '/api/analytics?months=3&days=30')
+  // The client's own day anchors the windows (today=...).
+  r = await call('GET', `/api/analytics?months=3&days=30&today=${todayDay}`)
   const a = r.data
   const trend = a.trendData
   const last = trend[trend.length - 1].balance
 
   // Movimientos realmente guardados (los futuros se rechazaron):
-  //   hoy 10 + hoy madrugada 10 + gasto de hoy 10 + gasto viejo 40 + sueldo viejo 100
+  //   hoy 10 + hoy mediodia 10 + gasto de hoy 10 + gasto viejo 40 + sueldo viejo 100
   // Saldo real = 100 - 70 = 30
-  check('el ultimo punto de la tendencia es el saldo real', Math.abs(last - 30) < 0.01, `balance=${last} (esperado 30)`)
+  check(
+    'el ultimo punto de la tendencia es el saldo real',
+    Math.abs(last - 30) < 0.01,
+    `balance=${last} (esperado 30)`
+  )
   check('la tendencia tiene 30 puntos', trend.length === 30, `${trend.length}`)
 
   const currentMonth = a.monthlyData[a.monthlyData.length - 1]
-  check('el mes actual recoge los 3 gastos de hoy', currentMonth.expense === 30, `expense=${currentMonth.expense}`)
+  check(
+    'el mes actual recoge los 3 gastos de hoy',
+    currentMonth.expense === 30,
+    `expense=${currentMonth.expense}`
+  )
   const prevMonth = a.monthlyData[a.monthlyData.length - 2]
-  check('el mes anterior recoge gasto e ingreso', prevMonth.expense === 40 && prevMonth.income === 100, `${prevMonth.income}/${prevMonth.expense}`)
+  check(
+    'el mes anterior recoge gasto e ingreso',
+    prevMonth.expense === 40 && prevMonth.income === 100,
+    `${prevMonth.income}/${prevMonth.expense}`
+  )
 
-  // El endpoint de listado solo trae la ventana, pero el saldo debe ser completo.
-  check('insights.avgDailyExpense numerico', typeof a.insights.avgDailyExpense === 'number', `${a.insights.avgDailyExpense}`)
+  check(
+    'insights.avgDailyExpense numerico',
+    typeof a.insights.avgDailyExpense === 'number',
+    `${a.insights.avgDailyExpense}`
+  )
   check('monthlyData con 3 puntos', a.monthlyData.length === 3, `${a.monthlyData.length}`)
 
-  // â”€â”€ dashboard coherente â”€â”€
+  // ── dashboard coherente ──
   r = await call('GET', '/api/dashboard')
   const expected = 100 - 40 - 30
-  check('el dashboard cuadra con la analitica', Math.abs(r.data.globalBalance - expected) < 0.01, `globalBalance=${r.data.globalBalance} (esperado ${expected})`)
-  check('dashboard cuenta 5 movimientos', r.data.transactionCount === 5, `count=${r.data.transactionCount}`)
-
-  console.log('\n' + results.join('\n'))
+  check(
+    'el dashboard cuadra con la analitica',
+    Math.abs(r.data.globalBalance - expected) < 0.01,
+    `globalBalance=${r.data.globalBalance} (esperado ${expected})`
+  )
+  check(
+    'dashboard cuenta 5 movimientos',
+    r.data.transactionCount === 5,
+    `count=${r.data.transactionCount}`
+  )
 })
-
-

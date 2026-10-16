@@ -2,7 +2,7 @@
 
 REST API for Porkex, a personal finance tracker: Express + TypeScript, Prisma ORM and SQLite.
 
-The frontend lives in `../porkex-frontend` and talks to this server through the
+The frontend lives in `../porkex-web-app` and talks to this server through the
 `/auth` and `/api` endpoints.
 
 ## Requirements
@@ -59,9 +59,12 @@ src/
   lib/
     prisma.ts       Client singleton (survives nodemon reloads)
     money.ts        Cents <-> amounts conversion
+    dates.ts        Calendar-day helpers (all math in UTC)
+    errors.ts       Prisma error helpers (unique violation)
     currencies.ts   Supported currency codes
   middleware/
     auth.ts         Bearer token verification
+    rateLimit.ts    Auth and API rate limiters
   routes/
     auth.ts         POST /auth/register, POST /auth/login
     api.ts          Everything else, all behind auth
@@ -85,12 +88,12 @@ Protected (Bearer token required):
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/dashboard` | Balance, totals, 10 recent transactions, pie data |
-| GET | `/api/analytics` | `?months=3\|6\|12` `&days=30\|90`; buckets, trends, insights |
-| GET | `/api/transactions` | Filter by date range, type, category, min, max, search; sort; paginate |
+| GET | `/api/analytics` | `?months=3\|6\|12` `&days=30\|90` `&today=YYYY-MM-DD`; buckets, trends, insights |
+| GET | `/api/transactions` | Filter by date range (`from`/`to` as `YYYY-MM-DD` or ISO), type, category, min, max, search; sort; paginate |
 | POST/PUT/DELETE | `/api/transactions[/:id]` | Future dates are rejected |
 | GET | `/api/categories` | Optional `?from` `&to`; per-period totals plus `allTimeCount` |
 | POST/PUT/DELETE | `/api/categories[/:id]` | Deleting with movements requires `?reassignTo=<id>` |
-| GET | `/api/budgets` | `?period=WEEK\|MONTH`; omit for both |
+| GET | `/api/budgets` | `?period=WEEK\|MONTH` `&today=YYYY-MM-DD`; omit period for both |
 | POST/PUT/DELETE | `/api/budgets[/:id]` | Unique per category and period |
 | GET/PUT | `/api/profile` | Name and currency |
 | POST | `/api/transactions` | Accepts an optional `clientId`; a replay returns `200` with the stored row instead of creating a second one |
@@ -142,6 +145,22 @@ Only the account named by `SEED_EMAIL` is ever read or written.
 
 ## Notes
 
+- **Dates are calendar days, stored as UTC midnight.** A transaction's `date` is
+  the day the user picked, not an instant: it is written as `YYYY-MM-DDT00:00:00.000Z`
+  and every computation (month/week buckets, ranges, budget windows) is done in
+  UTC with `getUTC*`/`Date.UTC`, so a day can never shift because of the
+  server's or the device's timezone.
+  - `from`/`to` accept either `YYYY-MM-DD` (the whole day, `00:00:00.000` to
+    `23:59:59.999` UTC) or a full ISO timestamp.
+  - The frontend sends `today=YYYY-MM-DD` on `/analytics` and `/budgets`: the
+    windows that depend on "now" are anchored to the user's own calendar day
+    instead of the server's. Real instants (`createdAt`) are still returned as
+    full timestamps and displayed in local time.
+- **Rate limiting.** `/auth` counts only failed attempts (30 per 15 min per IP,
+  `AUTH_RATE_LIMIT_MAX` to override) so logging in never consumes the budget;
+  the rest of the API allows 600 requests per minute per IP
+  (`API_RATE_LIMIT_MAX`). Both answer `429` with a JSON `error`. The app sets
+  `trust proxy` to 1 hop for the hosting reverse proxy.
 - **Money is stored as whole cents** in an `Int` column, not as a float. SQLite
   has no exact decimal type — a Prisma `Decimal` is stored as `REAL`, which is
   the same lossy double. Handlers accumulate in cents and convert only when
@@ -182,5 +201,9 @@ Only the account named by `SEED_EMAIL` is ever read or written.
     to be recreated. Give the new field a default (`@default("")`) if it has to
     be required, or make it optional.
 - Access tokens have no `expiresIn`: a session ends when the user logs out.
+  This is deliberate for a single-user app — being asked to log in again on the
+  phone is worse than the (small, personal) window a leaked token would open.
+  If the threat model changes, add `expiresIn` in `src/routes/auth.ts` and a
+  refresh flow before shortening it.
 - Weeks start on Monday, matching the frontend.
 - Currency is a display preference. There is no conversion between currencies.

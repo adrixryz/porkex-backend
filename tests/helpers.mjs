@@ -40,24 +40,28 @@ async function waitForServer(base, attempts = 60) {
 /**
  * Boots the API on a free port with an isolated database.
  * The returned ctx has { call, results, check, state, base }.
+ * `extraEnv` overrides any environment variable for this server (e.g. a lower
+ * rate limit so the 429 path can be tested without 30 requests).
  */
-export async function withServer(name, run) {
+export async function withServer(name, run, extraEnv = {}) {
   mkdirSync(TMP_DIR, { recursive: true })
   const stamp = `${name}-${process.pid}-${Date.now()}`
   const dbFile = join(TMP_DIR, `${stamp}.db`)
   rmSync(dbFile, { force: true })
 
   const databaseUrl = `file:${dbFile.replace(/\\/g, '/')}`
-  const env = { ...process.env, DATABASE_URL: databaseUrl, JWT_SECRET: 'test-secret' }
+  const env = { ...process.env, DATABASE_URL: databaseUrl, JWT_SECRET: 'test-secret', ...extraEnv }
 
-  const push = spawnSync('npx', ['prisma', 'db', 'push', '--skip-generate'], {
+  const push = spawnSync('npx prisma db push --skip-generate', {
     cwd: BACKEND_DIR,
     env,
     stdio: 'ignore',
     shell: true
   })
   if (push.status !== 0) {
-    throw new Error(`prisma db push failed (status ${push.status}). Run it manually with DATABASE_URL=${databaseUrl}`)
+    throw new Error(
+      `prisma db push failed (status ${push.status}). Run it manually with DATABASE_URL=${databaseUrl}`
+    )
   }
 
   const port = await freePort()
@@ -85,7 +89,11 @@ export async function withServer(name, run) {
       ...(body ? { body: JSON.stringify(body) } : {})
     })
     let data = null
-    try { data = await res.json() } catch { /* empty or non-JSON body */ }
+    try {
+      data = await res.json()
+    } catch {
+      /* empty or non-JSON body */
+    }
     return { status: res.status, data, contentType: res.headers.get('content-type') }
   }
 
@@ -93,16 +101,17 @@ export async function withServer(name, run) {
     results.push(`${ok ? 'PASS' : 'FAIL'}  ${label}${extra ? ` :: ${extra}` : ''}`)
   }
 
-  const stopServer = () => new Promise(resolveStop => {
-    if (server.exitCode !== null) return resolveStop()
-    server.once('close', () => resolveStop())
-    server.kill()
-    // Windows keeps the SQLite file locked until the process is really gone.
-    setTimeout(() => {
-      server.kill('SIGKILL')
-      resolveStop()
-    }, 2000)
-  })
+  const stopServer = () =>
+    new Promise(resolveStop => {
+      if (server.exitCode !== null) return resolveStop()
+      server.once('close', () => resolveStop())
+      server.kill()
+      // Windows keeps the SQLite file locked until the process is really gone.
+      setTimeout(() => {
+        server.kill('SIGKILL')
+        resolveStop()
+      }, 2000)
+    })
 
   const cleanup = async () => {
     await stopServer()
@@ -132,7 +141,8 @@ export async function withServer(name, run) {
 /** A throwaway user with the default categories seeded, ready to use. */
 export async function createTestUser(ctx, email = 'test@example.com') {
   const res = await ctx.call('POST', '/auth/register', { name: 'Test', email, password: 'secret1' })
-  if (res.status !== 201) throw new Error(`Could not create the test user: ${JSON.stringify(res.data)}`)
+  if (res.status !== 201)
+    throw new Error(`Could not create the test user: ${JSON.stringify(res.data)}`)
   ctx.state.token = res.data.token
   const cats = await ctx.call('GET', '/api/categories')
   return {

@@ -9,22 +9,27 @@
 //   - Inside a request handler, accumulate in cents (integers). Sums stay exact.
 //   - Convert with fromCents() only when writing the JSON response.
 
-const MINOR_UNITS = 100;
+const MINOR_UNITS = 100
+
+// A sanity ceiling for user-supplied amounts (ten million units). Cents stay at
+// 1e9, below the 32-bit limit of a Prisma Int column, and far below
+// Number.MAX_SAFE_INTEGER, so every sum remains exact.
+const MAX_MAJOR_UNITS = 10_000_000
 
 /** Parses a positive user-supplied amount (major units) into whole cents. */
 export function toCents(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(v);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  const cents = Math.round(n * MINOR_UNITS);
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_MAJOR_UNITS) return null
+  const cents = Math.round(n * MINOR_UNITS)
   // Rejects values that round down to nothing, e.g. 0.001.
-  return cents > 0 ? cents : null;
+  return cents > 0 ? cents : null
 }
 
 /** Same as toCents but for range filters, where a bound of 0 is meaningful. */
 export function toCentsNonNegative(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(v);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(n * MINOR_UNITS);
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n) || n < 0 || n > MAX_MAJOR_UNITS) return null
+  return Math.round(n * MINOR_UNITS)
 }
 
 /**
@@ -35,6 +40,6 @@ export function toCentsNonNegative(v: unknown): number | null {
  * boundary.
  */
 export function fromCents(cents: number | null | undefined): number {
-  if (cents === null || cents === undefined || !Number.isFinite(cents)) return 0;
-  return Math.round(cents) / MINOR_UNITS;
+  if (cents === null || cents === undefined || !Number.isFinite(cents)) return 0
+  return Math.round(cents) / MINOR_UNITS
 }

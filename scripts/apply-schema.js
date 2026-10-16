@@ -73,10 +73,10 @@ function objectOf(statement) {
 }
 
 async function exists(client, type, name) {
-  const res = await client.execute(
-    'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
-    [type, name]
-  )
+  const res = await client.execute('SELECT name FROM sqlite_master WHERE type = ? AND name = ?', [
+    type,
+    name
+  ])
   return res.rows.length > 0
 }
 
