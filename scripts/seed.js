@@ -3,7 +3,7 @@
 // totals, the budget progress bars (both under and over the limit) and the
 // transaction list with its filters and search.
 //
-//   npm run db:seed            # refuses to touch an account that already has data
+//   npm run db:seed            # skips (exit 0) when the account already has data
 //   npm run db:seed -- --reset # wipes that account's data first
 //
 // Configuration, all optional:
@@ -210,10 +210,15 @@ async function main() {
   if (existing) {
     const count = await prisma.transaction.count({ where: { userId: existing.id } })
     if (count > 0 && !RESET) {
-      throw new Error(
-        `${CONFIG.email} already has ${count} transactions. ` +
-          `Run "npm run db:seed -- --reset" to wipe and regenerate that account.`
+      // Skipping (rather than failing) keeps the Render build green: its build
+      // command runs this on every deploy, and an account with data is the
+      // normal state there, not an error. Nothing is ever wiped without --reset.
+      console.log(
+        `  skipped: ${CONFIG.email} already has ${count} transactions ` +
+          `(use --reset to wipe and regenerate)`
       )
+      await prisma.$disconnect()
+      return
     }
     await wipeUser(prisma, existing.id)
   }

@@ -127,8 +127,9 @@ data — "the analytics look wrong" is a real signal instead of noise.
 | `SEED_MONTHS` | `6` |
 | `SEED_CURRENCY` | `USD` |
 
-It refuses to touch an account that already has data, so it cannot quietly
-wipe a real one:
+It never touches an account that already has data: it skips it and exits 0, so
+the same command can run in the Render build on every deploy without failing.
+Regenerating requires the explicit flag:
 
 ```
 npm run db:seed -- --reset   # wipes and regenerates that account
