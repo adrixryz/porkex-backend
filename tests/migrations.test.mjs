@@ -201,7 +201,7 @@ try {
   await seed(rollback)
   const sql = 'CREATE TABLE Probe(id INTEGER); UPDATE "User" SET currency=NULL;'
   const failing = {
-    id: '004_failure',
+    id: '999_failure',
     sql,
     checksum: createHash('sha256').update(sql).digest('hex')
   }
