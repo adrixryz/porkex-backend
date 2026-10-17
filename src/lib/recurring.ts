@@ -109,19 +109,50 @@ async function materializeUser(userId: number, today: Date): Promise<RecurringRe
           })
         : []
       const stored = new Set(existing.map(row => dayKey(row.date)))
-      const missing = dates.filter(date => !stored.has(dayKey(date)))
+      const overrides = await tx.occurrenceOverride.findMany({
+        where: { ruleId: id, date: { in: dates } },
+        include: { tags: true }
+      })
+      const overrideByDate = new Map(overrides.map(item => [dayKey(item.date), item]))
+      const missing = dates.filter(
+        date => !stored.has(dayKey(date)) && overrideByDate.get(dayKey(date))?.kind !== 'SKIP'
+      )
       if (missing.length)
         await tx.transaction.createMany({
           data: missing.map(date => ({
-            amount: rule.amount,
+            amount: overrideByDate.get(dayKey(date))?.amount ?? rule.amount,
             type: rule.type,
-            description: rule.description,
-            categoryId: rule.categoryId,
+            description: overrideByDate.get(dayKey(date))?.comment ?? rule.description,
+            categoryId: overrideByDate.get(dayKey(date))?.categoryId ?? rule.categoryId,
             userId,
             date,
             recurringId: id
           }))
         })
+      const edited = overrides.filter(
+        item =>
+          item.kind === 'EDIT' &&
+          missing.some(date => date.getTime() === item.date.getTime()) &&
+          item.tags.length
+      )
+      if (edited.length) {
+        const movements = await tx.transaction.findMany({
+          where: { recurringId: id, date: { in: edited.map(item => item.date) } },
+          select: { id: true, date: true }
+        })
+        await tx.transactionTag.createMany({
+          data: edited.flatMap(item =>
+            item.tags.map(tag => ({
+              transactionId: movements.find(row => row.date.getTime() === item.date.getTime())!.id,
+              tagId: tag.tagId
+            }))
+          )
+        })
+      }
+      await tx.occurrenceOverride.updateMany({
+        where: { ruleId: id, date: { in: dates }, processedAt: null },
+        data: { processedAt: new Date() }
+      })
       await tx.recurringRule.update({
         where: { id },
         data: { nextDate, lastProcessedDate, active: !(rule.endDate && nextDate > rule.endDate) }

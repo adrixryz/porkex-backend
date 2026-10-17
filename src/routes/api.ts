@@ -8,6 +8,7 @@ import { fromCents, toCents, toCentsNonNegative } from '../lib/money'
 import { isUniqueViolation } from '../lib/errors'
 import { passwordError } from '../lib/passwords'
 import { tagsRouter } from './tags'
+import { occurrencesRouter } from './occurrences'
 import { commentInput, resolveTagIds, tagInclude } from '../lib/tags'
 import {
   firstOccurrenceOnOrAfter,
@@ -55,6 +56,7 @@ router.use(async (req: AuthRequest, res, next) => {
 })
 
 router.use('/tags', tagsRouter)
+router.use('/recurring', occurrencesRouter)
 
 type TxType = 'INCOME' | 'EXPENSE'
 
@@ -907,6 +909,15 @@ router.put('/categories/:id', async (req: AuthRequest, res) => {
           .status(409)
           .json({ error: 'Cannot change type: category has existing transactions.' })
       }
+      const incompatibleOverrides = await prisma.occurrenceOverride.count({
+        where: { categoryId: catId, processedAt: null }
+      })
+      if (incompatibleOverrides)
+        return res
+          .status(409)
+          .json({
+            error: 'Category is used by a next-only edit. Edit or skip that occurrence first.'
+          })
       const incompatibleRules = await prisma.recurringRule.count({
         where: { categoryId: catId, userId, type: { not: v.type! } }
       })
@@ -942,6 +953,12 @@ router.delete('/categories/:id', async (req: AuthRequest, res) => {
     const existing = await prisma.category.findFirst({ where: { id: catId, userId } })
     if (!existing) return res.status(404).json({ error: 'Category not found.' })
 
+    if (await prisma.occurrenceOverride.count({ where: { categoryId: catId, processedAt: null } }))
+      return res
+        .status(409)
+        .json({
+          error: 'Category is used by a next-only edit. Edit or skip that occurrence first.'
+        })
     const txCount = await prisma.transaction.count({ where: { categoryId: catId, userId } })
     if (txCount === 0) {
       // Recurring rules go with their category. Deleted explicitly — not left
@@ -1238,11 +1255,34 @@ function parseInterval(v: unknown): number | null {
   return n
 }
 
-function serializeRule<T extends { amount: number; lastProcessedDate?: Date | null }>(rule: T) {
-  const { lastProcessedDate: _cursor, ...visible } = rule
+function serializeRule<
+  T extends {
+    amount: number
+    lastProcessedDate?: Date | null
+    nextDate?: Date
+    exceptions?: {
+      date: Date
+      amount: number | null
+      comment: string | null
+      categoryId: number | null
+      tags: { tag: { id: string; name: string; position: number } }[]
+    }[]
+  }
+>(rule: T) {
+  const { lastProcessedDate: _cursor, exceptions, ...visible } = rule
+  const exception = exceptions?.find(item => item.date.getTime() === rule.nextDate?.getTime())
   void _cursor
   return {
     ...visible,
+    nextException: exception
+      ? {
+          date: exception.date,
+          amount: fromCents(exception.amount),
+          comment: exception.comment ?? '',
+          categoryId: exception.categoryId,
+          tags: exception.tags.map(link => link.tag).sort((a, b) => a.position - b.position)
+        }
+      : null,
     comment: (rule as T & { description?: string }).description ?? '',
     amount: fromCents(rule.amount)
   }
@@ -1343,7 +1383,10 @@ router.get('/recurring', async (req: AuthRequest, res) => {
   try {
     const rules = await prisma.recurringRule.findMany({
       where: { userId },
-      include: { category: true },
+      include: {
+        category: true,
+        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
+      },
       // Active rules first; within each group, the ones that come due next.
       orderBy: [{ active: 'desc' }, { nextDate: 'asc' }, { id: 'asc' }]
     })
@@ -1358,7 +1401,13 @@ router.post('/recurring', async (req: AuthRequest, res) => {
   const userId = req.userId!
 
   const findByClientId = (clientId: string | null) =>
-    prisma.recurringRule.findFirst({ where: { clientId, userId }, include: { category: true } })
+    prisma.recurringRule.findFirst({
+      where: { clientId, userId },
+      include: {
+        category: true,
+        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
+      }
+    })
 
   let clientId: string | null = null
   try {
@@ -1388,7 +1437,10 @@ router.post('/recurring', async (req: AuthRequest, res) => {
         nextDate: initialNextDate(v.startDate!, v.frequency!, v.interval!, res.locals.today),
         ...(clientId ? { clientId } : {})
       },
-      include: { category: true }
+      include: {
+        category: true,
+        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
+      }
     })
 
     // Materialize right away when the first occurrence falls on today, so the
@@ -1397,7 +1449,10 @@ router.post('/recurring', async (req: AuthRequest, res) => {
 
     const fresh = await prisma.recurringRule.findUnique({
       where: { id: created.id },
-      include: { category: true }
+      include: {
+        category: true,
+        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
+      }
     })
     res.status(201).json(serializeRule(fresh ?? created))
   } catch (error) {
@@ -1447,21 +1502,37 @@ router.put('/recurring/:id', async (req: AuthRequest, res) => {
     }
     if (endDate && nextDate > endDate) active = false
 
-    const updated = await prisma.recurringRule.update({
-      where: { id: ruleId },
-      data: {
-        amount: v.amount!,
-        type: v.type!,
-        description: v.description!,
-        categoryId: v.categoryId!,
-        frequency: v.frequency!,
-        interval: v.interval!,
-        startDate: v.startDate!,
-        endDate,
-        nextDate,
-        active
-      },
-      include: { category: true }
+    const updated = await prisma.$transaction(async db => {
+      await db.occurrenceOverride.deleteMany({
+        where: {
+          ruleId,
+          processedAt: null,
+          ...(existing.type !== v.type ? {} : { date: { not: nextDate } })
+        }
+      })
+      const rule = await db.recurringRule.update({
+        where: { id: ruleId },
+        data: {
+          amount: v.amount!,
+          type: v.type!,
+          description: v.description!,
+          categoryId: v.categoryId!,
+          frequency: v.frequency!,
+          interval: v.interval!,
+          startDate: v.startDate!,
+          endDate,
+          nextDate,
+          active
+        },
+        include: {
+          category: true,
+          exceptions: {
+            where: { processedAt: null },
+            include: { tags: { include: { tag: true } } }
+          }
+        }
+      })
+      return rule
     })
 
     // A resume may make today's occurrence due again; settle it before
@@ -1470,7 +1541,10 @@ router.put('/recurring/:id', async (req: AuthRequest, res) => {
 
     const fresh = await prisma.recurringRule.findUnique({
       where: { id: ruleId },
-      include: { category: true }
+      include: {
+        category: true,
+        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
+      }
     })
     res.json(serializeRule(fresh ?? updated))
   } catch (error) {

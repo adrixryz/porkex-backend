@@ -32,15 +32,16 @@ model User {
 }
 
 model Category {
-  id             Int             @id @default(autoincrement())
-  name           String
-  type           String
-  color          String?
-  userId         Int
-  user           User            @relation(fields: [userId], references: [id])
-  transactions   Transaction[]
-  budgets        Budget[]
-  recurringRules RecurringRule[]
+  id                  Int                  @id @default(autoincrement())
+  name                String
+  type                String
+  color               String?
+  userId              Int
+  user                User                 @relation(fields: [userId], references: [id])
+  transactions        Transaction[]
+  budgets             Budget[]
+  recurringRules      RecurringRule[]
+  occurrenceOverrides OccurrenceOverride[]
 
   @@unique([userId, name])
   @@index([userId])
@@ -71,17 +72,17 @@ model Budget {
 // src/lib/recurring.ts), so every existing reader — dashboard, analytics,
 // budgets, the transactions list — keeps working on plain rows.
 model RecurringRule {
-  id                Int           @id @default(autoincrement())
+  id                Int                  @id @default(autoincrement())
   userId            Int
-  user              User          @relation(fields: [userId], references: [id])
+  user              User                 @relation(fields: [userId], references: [id])
   categoryId        Int
-  category          Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  category          Category             @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   amount            Int
   type              String
   description       String
   // WEEK | MONTH | YEAR, meaning "every `interval` of them".
-  frequency         String        @default("MONTH")
-  interval          Int           @default(1)
+  frequency         String               @default("MONTH")
+  interval          Int                  @default(1)
   // The schedule's anchor: month occurrences keep this day (clamped to the
   // last day of shorter months), week occurrences its weekday.
   startDate         DateTime
@@ -91,12 +92,13 @@ model RecurringRule {
   nextDate          DateTime
   // Durable cursor: deleting/editing generated history must never replay it.
   lastProcessedDate DateTime?
-  active            Boolean       @default(true)
+  active            Boolean              @default(true)
   // See Transaction.clientId: same replay protection for queued creates.
   clientId          String?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
   transactions      Transaction[]
+  exceptions        OccurrenceOverride[]
 
   // Scoped by user, like Transaction: NULLs are distinct, so many client-less
   // rows coexist while a row from the queue cannot duplicate on replay.
@@ -149,6 +151,7 @@ model Tag {
   position       Int
   references     TagReference[]
   transactions   TransactionTag[]
+  occurrences    OccurrenceTag[]
 
   @@unique([userId, normalizedName])
   @@index([userId, position])
@@ -167,5 +170,32 @@ model TransactionTag {
   tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([transactionId, tagId])
+  @@index([tagId])
+}
+
+model OccurrenceOverride {
+  ruleId      Int
+  date        DateTime
+  kind        String
+  amount      Int?
+  comment     String?
+  categoryId  Int?
+  category    Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  rule        RecurringRule   @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  processedAt DateTime?
+  tags        OccurrenceTag[]
+
+  @@id([ruleId, date])
+  @@index([categoryId])
+}
+
+model OccurrenceTag {
+  ruleId     Int
+  date       DateTime
+  tagId      String
+  occurrence OccurrenceOverride @relation(fields: [ruleId, date], references: [ruleId, date], onDelete: Cascade)
+  tag        Tag                @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, date, tagId])
   @@index([tagId])
 }
