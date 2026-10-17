@@ -7,6 +7,8 @@ import { isValidCurrency } from '../lib/currencies'
 import { fromCents, toCents, toCentsNonNegative } from '../lib/money'
 import { isUniqueViolation } from '../lib/errors'
 import { passwordError } from '../lib/passwords'
+import { tagsRouter } from './tags'
+import { commentInput, resolveTagIds, tagInclude } from '../lib/tags'
 import {
   firstOccurrenceOnOrAfter,
   parseFrequency,
@@ -51,6 +53,8 @@ router.use(async (req: AuthRequest, res, next) => {
   await catchUp(req, res)
   next()
 })
+
+router.use('/tags', tagsRouter)
 
 type TxType = 'INCOME' | 'EXPENSE'
 
@@ -119,8 +123,21 @@ function cleanText(v: unknown): string {
 
 // Every amount that leaves the API is converted from cents exactly once, here.
 // Everything above this line stays in cents.
-function serializeTransaction<T extends { amount: number }>(tx: T) {
-  return { ...tx, amount: fromCents(tx.amount) }
+function serializeTransaction<
+  T extends {
+    amount: number
+    description: string
+    tags?: { tag: { id: string; name: string; position: number } }[]
+  }
+>(tx: T) {
+  return {
+    ...tx,
+    comment: tx.description,
+    tags: (tx.tags ?? [])
+      .map(link => link.tag)
+      .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id)),
+    amount: fromCents(tx.amount)
+  }
 }
 
 function parseIntParam(v: unknown, fallback: number): number {
@@ -183,7 +200,7 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
   try {
     const transactions = await prisma.transaction.findMany({
       where: { userId },
-      include: { category: true },
+      include: { category: true, ...tagInclude },
       // Most recent by its own date first; id breaks ties between same-day entries.
       orderBy: [{ date: 'desc' }, { id: 'desc' }],
       take: 10
@@ -523,7 +540,7 @@ router.get('/transactions', async (req: AuthRequest, res) => {
       prisma.transaction.count({ where }),
       prisma.transaction.findMany({
         where,
-        include: { category: true },
+        include: { category: true, ...tagInclude },
         orderBy,
         skip: (requestedPage - 1) * perPage,
         take: perPage
@@ -540,7 +557,7 @@ router.get('/transactions', async (req: AuthRequest, res) => {
         ? firstPage
         : await prisma.transaction.findMany({
             where,
-            include: { category: true },
+            include: { category: true, ...tagInclude },
             orderBy,
             skip: (page - 1) * perPage,
             take: perPage
@@ -575,7 +592,9 @@ async function validateTransactionInput(
   body: {
     amount: unknown
     type: unknown
-    description: unknown
+    description?: unknown
+    comment?: unknown
+    tagIds?: unknown
     categoryId: unknown
     date?: unknown
     clientId?: unknown
@@ -585,6 +604,7 @@ async function validateTransactionInput(
   amount?: number
   type?: TxType
   description?: string
+  tagIds?: string[]
   categoryId?: number
   date?: Date
   clientId?: string
@@ -595,8 +615,8 @@ async function validateTransactionInput(
 
   if (!isValidType(body.type)) return { error: 'Type must be INCOME or EXPENSE.' }
 
-  const description = cleanText(body.description)
-  if (!description) return { error: 'Description is required.' }
+  const description = commentInput(body as Record<string, unknown>)
+  if (description === null) return { error: 'Comment must be a string of at most 200 characters.' }
   if (description.length > MAX_DESCRIPTION_LENGTH) {
     return { error: `Description must be at most ${MAX_DESCRIPTION_LENGTH} characters.` }
   }
@@ -630,10 +650,13 @@ async function validateTransactionInput(
     date = parsed
   }
 
+  const tagIds = body.tagIds === undefined ? undefined : await resolveTagIds(userId, body.tagIds)
+  if (tagIds === null) return { error: 'Select 0–5 unique tags belonging to this account.' }
   return {
     amount,
     type: body.type,
     description,
+    tagIds,
     categoryId,
     date,
     ...(clientId.value ? { clientId: clientId.value } : {})
@@ -646,7 +669,7 @@ router.post('/transactions', async (req: AuthRequest, res) => {
   const findByClientId = (clientId: string | null) =>
     prisma.transaction.findFirst({
       where: { clientId, userId },
-      include: { category: true }
+      include: { category: true, ...tagInclude }
     })
 
   let clientId: string | null = null
@@ -670,12 +693,13 @@ router.post('/transactions', async (req: AuthRequest, res) => {
         description: v.description!,
         categoryId: v.categoryId!,
         userId,
+        tags: { create: (v.tagIds ?? []).map(tagId => ({ tagId })) },
         // A missing date defaults to today's calendar day (UTC midnight), not
         // to the current instant: `date` is a day, `createdAt` is the clock.
         date: v.date ?? res.locals.today,
         ...(clientId ? { clientId } : {})
       },
-      include: { category: true }
+      include: { category: true, ...tagInclude }
     })
     res.status(201).json(serializeTransaction(tx))
   } catch (error) {
@@ -713,9 +737,12 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
         type: v.type!,
         description: v.description!,
         categoryId: v.categoryId!,
-        ...(v.date ? { date: v.date } : {})
+        ...(v.date ? { date: v.date } : {}),
+        ...(v.tagIds !== undefined
+          ? { tags: { deleteMany: {}, create: v.tagIds.map(tagId => ({ tagId })) } }
+          : {})
       },
-      include: { category: true }
+      include: { category: true, ...tagInclude }
     })
     res.json(serializeTransaction(tx))
   } catch (error) {
@@ -1214,7 +1241,11 @@ function parseInterval(v: unknown): number | null {
 function serializeRule<T extends { amount: number; lastProcessedDate?: Date | null }>(rule: T) {
   const { lastProcessedDate: _cursor, ...visible } = rule
   void _cursor
-  return { ...visible, amount: fromCents(rule.amount) }
+  return {
+    ...visible,
+    comment: (rule as T & { description?: string }).description ?? '',
+    amount: fromCents(rule.amount)
+  }
 }
 
 async function validateRecurringInput(
@@ -1239,8 +1270,8 @@ async function validateRecurringInput(
 
   if (!isValidType(body.type)) return { error: 'Type must be INCOME or EXPENSE.' }
 
-  const description = cleanText(body.description)
-  if (!description) return { error: 'Description is required.' }
+  const description = commentInput(body)
+  if (description === null) return { error: 'Comment must be a string of at most 200 characters.' }
   if (description.length > MAX_DESCRIPTION_LENGTH) {
     return { error: `Description must be at most ${MAX_DESCRIPTION_LENGTH} characters.` }
   }

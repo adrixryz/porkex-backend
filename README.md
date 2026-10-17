@@ -293,3 +293,7 @@ Only the account named by `SEED_EMAIL` is ever read or written.
   refresh flow before shortening it.
 - Weeks start on Monday, matching the frontend.
 - Currency is a display preference. There is no conversion between currencies.
+
+## Tags and comments
+
+Comments are optional (200 characters); legacy description payloads remain supported. Tags have account-scoped names of 1–20 Unicode code points, a persisted manual order and stable client references. GET/POST /api/tags, PUT /api/tags/:id, PUT /api/tags/order and DELETE /api/tags/:id manage the catalog. Movements accept 0–5 tagIds; omitted tagIds preserve associations on older PUT requests. Deleting a tag removes links, never movements. Migration 004 adds the catalog without changing existing rows.

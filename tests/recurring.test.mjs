@@ -366,7 +366,7 @@ await withServer('recurring', async ctx => {
     ['intervalo 25', { interval: 25 }],
     ['fin antes del inicio', { endDate: toISO(utcDay(-1)) }],
     ['categoría de otro tipo', { type: 'INCOME' }],
-    ['sin descripción', { description: '   ' }],
+    ['comentario no válido', { comment: true }],
     ['importe 0', { amount: 0 }],
     ['categoría inexistente', { categoryId: 999999 }]
   ]

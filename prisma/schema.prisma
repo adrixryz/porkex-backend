@@ -27,6 +27,7 @@ model User {
   categories       Category[]
   budgets          Budget[]
   recurringRules   RecurringRule[]
+  tags             Tag[]
   createdAt        DateTime        @default(now())
 }
 
@@ -70,32 +71,32 @@ model Budget {
 // src/lib/recurring.ts), so every existing reader — dashboard, analytics,
 // budgets, the transactions list — keeps working on plain rows.
 model RecurringRule {
-  id           Int           @id @default(autoincrement())
-  userId       Int
-  user         User          @relation(fields: [userId], references: [id])
-  categoryId   Int
-  category     Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  amount       Int
-  type         String
-  description  String
+  id                Int           @id @default(autoincrement())
+  userId            Int
+  user              User          @relation(fields: [userId], references: [id])
+  categoryId        Int
+  category          Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  amount            Int
+  type              String
+  description       String
   // WEEK | MONTH | YEAR, meaning "every `interval` of them".
-  frequency    String        @default("MONTH")
-  interval     Int           @default(1)
+  frequency         String        @default("MONTH")
+  interval          Int           @default(1)
   // The schedule's anchor: month occurrences keep this day (clamped to the
   // last day of shorter months), week occurrences its weekday.
-  startDate    DateTime
+  startDate         DateTime
   // Inclusive; null means it runs forever.
-  endDate      DateTime?
+  endDate           DateTime?
   // The next occurrence still to materialize, at UTC midnight.
-  nextDate     DateTime
+  nextDate          DateTime
   // Durable cursor: deleting/editing generated history must never replay it.
   lastProcessedDate DateTime?
-  active       Boolean       @default(true)
+  active            Boolean       @default(true)
   // See Transaction.clientId: same replay protection for queued creates.
-  clientId     String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  transactions Transaction[]
+  clientId          String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  transactions      Transaction[]
 
   // Scoped by user, like Transaction: NULLs are distinct, so many client-less
   // rows coexist while a row from the queue cannot duplicate on replay.
@@ -105,7 +106,7 @@ model RecurringRule {
 }
 
 model Transaction {
-  id          Int            @id @default(autoincrement())
+  id          Int              @id @default(autoincrement())
   amount      Int
   type        String
   // Set by the client so a retried write cannot create a duplicate: the
@@ -114,18 +115,19 @@ model Transaction {
   // created without a client (tests, seed data).
   clientId    String?
   description String
-  date        DateTime       @default(now())
-  createdAt   DateTime       @default(now())
+  date        DateTime         @default(now())
+  createdAt   DateTime         @default(now())
   categoryId  Int
-  category    Category       @relation(fields: [categoryId], references: [id])
+  category    Category         @relation(fields: [categoryId], references: [id])
   userId      Int
-  user        User           @relation(fields: [userId], references: [id])
+  user        User             @relation(fields: [userId], references: [id])
   // Set on the movements a recurring rule generated; null for everything else.
   // Deleting a rule keeps its movements: they are history. The delete route
   // clears this pointer explicitly, because the additive deploy tool cannot
   // add a foreign key to an already existing table.
   recurringId Int?
-  recurring   RecurringRule? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  recurring   RecurringRule?   @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  tags        TransactionTag[]
 
   // Scoped by user: two accounts may independently use the same clientId, which
   // matches how everything else in this schema is owned. NULLs are distinct in
@@ -136,4 +138,34 @@ model Transaction {
   @@unique([recurringId, date])
   @@index([userId, date])
   @@index([categoryId])
+}
+
+model Tag {
+  id             String           @id
+  userId         Int
+  user           User             @relation(fields: [userId], references: [id])
+  name           String
+  normalizedName String
+  position       Int
+  references     TagReference[]
+  transactions   TransactionTag[]
+
+  @@unique([userId, normalizedName])
+  @@index([userId, position])
+}
+
+model TagReference {
+  id    String @id
+  tagId String
+  tag   Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+}
+
+model TransactionTag {
+  transactionId Int
+  tagId         String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([transactionId, tagId])
+  @@index([tagId])
 }
