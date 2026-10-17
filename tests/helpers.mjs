@@ -39,7 +39,9 @@ async function waitForServer(base, attempts = 60) {
 
 /**
  * Boots the API on a free port with an isolated database.
- * The returned ctx has { call, results, check, state, base }.
+ * The returned ctx has { call, results, check, state, base, dbFile } — dbFile
+ * is the throwaway SQLite path, for suites that need to poke at rows directly
+ * (the recurring suite ages a rule's nextDate to simulate elapsed days).
  * `extraEnv` overrides any environment variable for this server (e.g. a lower
  * rate limit so the 429 path can be tested without 30 requests).
  */
@@ -127,7 +129,7 @@ export async function withServer(name, run, extraEnv = {}) {
   }
 
   try {
-    await run({ call, check, results, state, base })
+    await run({ call, check, results, state, base, dbFile })
   } finally {
     await cleanup()
   }

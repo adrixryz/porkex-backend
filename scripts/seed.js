@@ -102,9 +102,11 @@ function createClient_() {
 }
 
 async function wipeUser(prisma, userId) {
-  // Sequential, and in dependency order: budgets and transactions both point at
-  // categories, and everything points at the user. Running these concurrently
-  // let them interleave, which made the reported counts wrong.
+  // Sequential, and in dependency order: budgets and recurring rules both
+  // point at categories, transactions point at rules and categories, and
+  // everything points at the user. Running these concurrently let them
+  // interleave, which made the reported counts wrong.
+  const rules = await prisma.recurringRule.deleteMany({ where: { userId } })
   const budgets = await prisma.budget.deleteMany({ where: { userId } })
   const transactions = await prisma.transaction.deleteMany({ where: { userId } })
   const categories = await prisma.category.deleteMany({ where: { userId } })
@@ -119,7 +121,8 @@ async function wipeUser(prisma, userId) {
 
   console.log(
     `  removed ${transactions.count} transactions, ${budgets.count} budgets, ` +
-      `${categories.count} categories, ${user.count} user(s)`
+      `${rules.count} recurring rules, ${categories.count} categories, ` +
+      `${user.count} user(s)`
   )
 }
 

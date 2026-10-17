@@ -60,6 +60,7 @@ src/
     prisma.ts       Client singleton (survives nodemon reloads)
     money.ts        Cents <-> amounts conversion
     dates.ts        Calendar-day helpers (all math in UTC)
+    recurring.ts    Recurring-rule schedule and catch-up materialization
     errors.ts       Prisma error helpers (unique violation)
     currencies.ts   Supported currency codes
     passwords.ts    Password policy (shared by register and change)
@@ -70,7 +71,7 @@ src/
     auth.ts         POST /auth/register, POST /auth/login
     api.ts          Everything else, all behind auth
 prisma/
-  schema.prisma     User, Category, Budget, Transaction
+  schema.prisma     User, Category, Budget, Transaction, RecurringRule
 scripts/            Maintenance scripts
 tests/              Integration tests
 ```
@@ -97,6 +98,8 @@ Protected (Bearer token required):
 | POST/PUT/DELETE | `/api/categories[/:id]` | Deleting with movements requires `?reassignTo=<id>` |
 | GET | `/api/budgets` | `?period=WEEK\|MONTH` `&today=YYYY-MM-DD`; omit period for both |
 | POST/PUT/DELETE | `/api/budgets[/:id]` | Unique per category and period |
+| GET | `/api/recurring` | Rules with their next occurrence; active first, due first within each group |
+| POST/PUT/DELETE | `/api/recurring[/:id]` | `frequency` (WEEK/MONTH/YEAR) × `interval` (1–12), optional `endDate`; `PUT` also takes `active` to pause/resume; `POST` accepts `clientId` like transactions |
 | GET/PUT | `/api/profile` | Name and currency |
 | PUT | `/api/password` | Change the password; verifies the current one (400, never 401, on mismatch) |
 | POST | `/api/transactions` | Accepts an optional `clientId`; a replay returns `200` with the stored row instead of creating a second one |
@@ -182,7 +185,24 @@ Only the account named by `SEED_EMAIL` is ever read or written.
   replay returns the stored row with `200` instead of writing a second one. The
   frontend attaches one before the first attempt so a lost response cannot
   duplicate a movement. `@@unique([userId, clientId])` is scoped by user, and a
-  `P2002` from a lost race is turned back into the same `200`.
+  `P2002` from a lost race is turned back into the same `200`. Recurring rules
+  work the same way.
+- **Recurring rules materialize into normal transactions.** A rule (every 1–12
+  weeks/months/years) becomes real `Transaction` rows, so the dashboard,
+  analytics, budgets and the transactions list keep reading plain rows. There is
+  no scheduler: every authenticated request first runs a catch-up of whatever
+  came due — a single indexed `SELECT` when nothing is — which also covers days
+  the free-tier server spent asleep. `@@unique([recurringId, date])` makes the
+  pass idempotent, so a replay or a race cannot materialize a date twice.
+  - A rule created, edited or resumed today starts at the next occurrence that
+    has not passed (today itself counts) — nothing is backfilled, and a pause is
+    never filled in afterwards.
+  - The rule's start day is the anchor: month occurrences that land on a date
+    the target month does not have clamp to its last day (the 31st → Feb 28/29)
+    and return to the anchor day afterwards, instead of drifting earlier.
+  - Deleting a rule keeps the movements it already created, as plain history
+    (`recurringId` is cleared in the delete route: the additive `db:apply` tool
+    cannot add a foreign key to an existing production table).
 - There are no Prisma migrations. The schema is applied by pushing it, and
   `db push` is the intended local workflow.
 - **`prisma db push` cannot target a hosted database.** The Prisma CLI reads
