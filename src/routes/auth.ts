@@ -80,7 +80,15 @@ router.post('/register', async (req, res) => {
     const token = generateToken(user.id)
     res.status(201).json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, currency: user.currency }
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        currency: user.currency,
+        defaultPeriod: user.defaultPeriod,
+        firstDayOfWeek: user.firstDayOfWeek,
+        decimalSeparator: user.decimalSeparator
+      }
     })
   } catch (error) {
     // The findUnique above loses the race when two registrations with the same
@@ -117,7 +125,15 @@ router.post('/login', async (req, res) => {
     const token = generateToken(user.id)
     res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, currency: user.currency }
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        currency: user.currency,
+        defaultPeriod: user.defaultPeriod,
+        firstDayOfWeek: user.firstDayOfWeek,
+        decimalSeparator: user.decimalSeparator
+      }
     })
   } catch (error) {
     console.error('Login failed.', error)

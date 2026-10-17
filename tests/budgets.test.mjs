@@ -257,4 +257,56 @@ await withServer('budgets', async ({ call, check, state }) => {
     !r.data.budgets.some(b => b.categoryId === probeCategory),
     JSON.stringify(r.data.budgets)
   )
+
+  // ── weekStart: la ventana semanal se ancla al día elegido ──
+  // A category of its own, so no other spending can leak into the windows.
+  r = await call('POST', '/api/categories', {
+    name: 'Week Probe',
+    type: 'EXPENSE',
+    color: '#123456'
+  })
+  check('categoria para la sonda semanal → 201', r.status === 201, JSON.stringify(r.data))
+  const weekProbe = r.data.id
+  await call('POST', '/api/budgets', { categoryId: weekProbe, amount: 10, period: 'WEEK' })
+
+  // The most recent Sunday, and a Tuesday of that same week: with Monday as
+  // the first day the Sunday belongs to the previous week, with Sunday as the
+  // first day it opens the window.
+  const sunday = new Date(today)
+  sunday.setDate(sunday.getDate() - ((sunday.getDay() + 7) % 7))
+  const sundayStr = dayString(sunday)
+  const tuesdayStr = dayString(
+    new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() + 2)
+  )
+
+  await call('POST', '/api/transactions', {
+    amount: 4,
+    type: 'EXPENSE',
+    description: 'sonda domingo',
+    categoryId: weekProbe,
+    date: sundayStr
+  })
+
+  r = await call('GET', `/api/budgets?period=WEEK&today=${tuesdayStr}&weekStart=SUNDAY`)
+  const sunWeek = r.data.budgets.find(b => b.categoryId === weekProbe)
+  check(
+    'weekStart=SUNDAY: el domingo abre la ventana',
+    sunWeek?.spent === 4,
+    `spent=${sunWeek?.spent}`
+  )
+
+  r = await call('GET', `/api/budgets?period=WEEK&today=${tuesdayStr}&weekStart=MONDAY`)
+  const monWeek = r.data.budgets.find(b => b.categoryId === weekProbe)
+  check(
+    'weekStart=MONDAY: el mismo domingo queda fuera',
+    monWeek?.spent === 0,
+    `spent=${monWeek?.spent}`
+  )
+
+  r = await call('GET', `/api/budgets?period=WEEK&today=${tuesdayStr}`)
+  const defaultWeek = r.data.budgets.find(b => b.categoryId === weekProbe)
+  check('sin weekStart se asume MONDAY', defaultWeek?.spent === 0, `spent=${defaultWeek?.spent}`)
+
+  r = await call('GET', '/api/budgets?period=WEEK&weekStart=FUNDAY')
+  check('weekStart invalido → 400', r.status === 400, r.data?.error)
 })

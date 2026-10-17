@@ -56,6 +56,39 @@ const MAX_PROFILE_NAME_LENGTH = 80
 // The UI only offers 6-digit hexes; anything else would be a styling surprise.
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/
 
+// Display preferences the client mirrors into the account (see PUT /profile).
+// The week start also anchors the weekly budget window (see budgetRange).
+const DEFAULT_PERIODS = ['day', 'week', 'month', 'year'] as const
+const WEEK_DAYS = [
+  'MONDAY',
+  'TUESDAY',
+  'WEDNESDAY',
+  'THURSDAY',
+  'FRIDAY',
+  'SATURDAY',
+  'SUNDAY'
+] as const
+const DECIMAL_SEPARATORS = ['.', ','] as const
+
+// JS Date.getUTCDay(): Sunday is 0. Week windows walk back from it.
+const WEEK_DAY_INDEX: Record<(typeof WEEK_DAYS)[number], number> = {
+  SUNDAY: 0,
+  MONDAY: 1,
+  TUESDAY: 2,
+  WEDNESDAY: 3,
+  THURSDAY: 4,
+  FRIDAY: 5,
+  SATURDAY: 6
+}
+
+function isDefaultPeriod(v: unknown): v is (typeof DEFAULT_PERIODS)[number] {
+  return DEFAULT_PERIODS.includes(v as (typeof DEFAULT_PERIODS)[number])
+}
+
+function isWeekDay(v: unknown): v is (typeof WEEK_DAYS)[number] {
+  return WEEK_DAYS.includes(v as (typeof WEEK_DAYS)[number])
+}
+
 function isValidType(v: unknown): v is TxType {
   return v === 'INCOME' || v === 'EXPENSE'
 }
@@ -918,20 +951,33 @@ router.delete('/categories/:id', async (req: AuthRequest, res) => {
 const BUDGET_PERIODS = ['WEEK', 'MONTH'] as const
 type BudgetPeriod = (typeof BUDGET_PERIODS)[number]
 
-// The window a budget covers, in UTC calendar days. Weeks start on Monday,
-// matching the frontend. `today` is the client's own calendar day (see
-// resolveToday), so a user west of UTC does not see the window roll over
-// hours before their midnight.
-function budgetRange(period: BudgetPeriod, today: Date): { from: Date; to: Date } {
+// The window a budget covers, in UTC calendar days. Weeks start on the day the
+// client configured (Monday by default, the historical behaviour). `today` is
+// the client's own calendar day (see resolveToday), so a user west of UTC does
+// not see the window roll over hours before their midnight.
+function budgetRange(
+  period: BudgetPeriod,
+  today: Date,
+  weekStart: number
+): { from: Date; to: Date } {
   if (period === 'WEEK') {
-    const monday = addDays(today, -((today.getUTCDay() + 6) % 7))
-    const sunday = addDays(monday, 6)
-    return { from: monday, to: new Date(sunday.getTime() + 86400000 - 1) }
+    const first = addDays(today, -((today.getUTCDay() - weekStart + 7) % 7))
+    const last = addDays(first, 6)
+    return { from: first, to: new Date(last.getTime() + 86400000 - 1) }
   }
   return {
     from: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)),
     to: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1) - 1)
   }
+}
+
+// The first day of the week the client's windows are anchored to, as a
+// getUTCDay() index. Absent means Monday, so requests without the preference
+// (or older clients) keep working.
+function resolveWeekStart(query: Record<string, unknown>): number | null {
+  if (query.weekStart === undefined || query.weekStart === '') return WEEK_DAY_INDEX.MONDAY
+  if (!isWeekDay(query.weekStart)) return null
+  return WEEK_DAY_INDEX[query.weekStart]
 }
 
 function parseBudgetPeriod(v: unknown): BudgetPeriod | null {
@@ -950,6 +996,11 @@ router.get('/budgets', async (req: AuthRequest, res) => {
   const today = resolveToday(req.query as Record<string, unknown>)
   if (!today) return res.status(400).json({ error: 'Invalid "today" date.' })
 
+  const weekStart = resolveWeekStart(req.query as Record<string, unknown>)
+  if (weekStart === null) {
+    return res.status(400).json({ error: 'Week start must be a day name (e.g. MONDAY).' })
+  }
+
   try {
     // No period filter means both, so each budget is measured on its own cycle.
     const budgets = await prisma.budget.findMany({
@@ -964,7 +1015,7 @@ router.get('/budgets', async (req: AuthRequest, res) => {
     const spentByPeriod = new Map<BudgetPeriod, Map<number, number>>()
 
     for (const period of periods) {
-      const window = budgetRange(period, today)
+      const window = budgetRange(period, today, weekStart)
       const grouped = await prisma.transaction.groupBy({
         by: ['categoryId'],
         where: { userId, date: { gte: window.from, lte: window.to } },
@@ -1386,6 +1437,9 @@ const PROFILE_SELECT = {
   name: true,
   email: true,
   currency: true,
+  defaultPeriod: true,
+  firstDayOfWeek: true,
+  decimalSeparator: true,
   createdAt: true
 } as const
 
@@ -1406,9 +1460,15 @@ router.get('/profile', async (req: AuthRequest, res) => {
 
 router.put('/profile', async (req: AuthRequest, res) => {
   const userId = req.userId!
-  const data: { name?: string; currency?: string } = {}
+  const data: {
+    name?: string
+    currency?: string
+    defaultPeriod?: string
+    firstDayOfWeek?: string
+    decimalSeparator?: string
+  } = {}
 
-  // Both fields are optional, so the client can update one without sending the other.
+  // Every field is optional, so the client can update one without sending the others.
   if (req.body?.name !== undefined) {
     const name = cleanText(req.body.name)
     if (!name) {
@@ -1427,6 +1487,27 @@ router.put('/profile', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Unsupported currency code.' })
     }
     data.currency = req.body.currency
+  }
+
+  if (req.body?.defaultPeriod !== undefined) {
+    if (!isDefaultPeriod(req.body.defaultPeriod)) {
+      return res.status(400).json({ error: 'Default period must be day, week, month or year.' })
+    }
+    data.defaultPeriod = req.body.defaultPeriod
+  }
+
+  if (req.body?.firstDayOfWeek !== undefined) {
+    if (!isWeekDay(req.body.firstDayOfWeek)) {
+      return res.status(400).json({ error: 'First day of the week must be a day name.' })
+    }
+    data.firstDayOfWeek = req.body.firstDayOfWeek
+  }
+
+  if (req.body?.decimalSeparator !== undefined) {
+    if (!DECIMAL_SEPARATORS.includes(req.body.decimalSeparator)) {
+      return res.status(400).json({ error: 'Decimal separator must be "." or ",".' })
+    }
+    data.decimalSeparator = req.body.decimalSeparator
   }
 
   if (Object.keys(data).length === 0) {

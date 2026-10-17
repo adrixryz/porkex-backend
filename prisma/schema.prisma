@@ -11,16 +11,23 @@ datasource db {
 }
 
 model User {
-  id             Int             @id @default(autoincrement())
-  name           String
-  email          String          @unique
-  password       String
-  currency       String          @default("USD")
-  transactions   Transaction[]
-  categories     Category[]
-  budgets        Budget[]
-  recurringRules RecurringRule[]
-  createdAt      DateTime        @default(now())
+  id               Int             @id @default(autoincrement())
+  name             String
+  email            String          @unique
+  password         String
+  currency         String          @default("USD")
+  // Display preferences, mirrored from the frontend so they follow the account
+  // to any browser. Plain strings, not enums: the additive deploy tool adds
+  // them to an existing table, and SQLite needs a default for a NOT NULL
+  // column (see scripts/apply-schema.js).
+  defaultPeriod    String          @default("week")
+  firstDayOfWeek   String          @default("MONDAY")
+  decimalSeparator String          @default(".")
+  transactions     Transaction[]
+  categories       Category[]
+  budgets          Budget[]
+  recurringRules   RecurringRule[]
+  createdAt        DateTime        @default(now())
 }
 
 model Category {

@@ -96,11 +96,11 @@ Protected (Bearer token required):
 | POST/PUT/DELETE | `/api/transactions[/:id]` | Future dates are rejected |
 | GET | `/api/categories` | Optional `?from` `&to`; per-period totals plus `allTimeCount` |
 | POST/PUT/DELETE | `/api/categories[/:id]` | Deleting with movements requires `?reassignTo=<id>` |
-| GET | `/api/budgets` | `?period=WEEK\|MONTH` `&today=YYYY-MM-DD`; omit period for both |
+| GET | `/api/budgets` | `?period=WEEK\|MONTH` `&today=YYYY-MM-DD` `&weekStart=MONDAY..SUNDAY` (defaults to MONDAY); omit period for both |
 | POST/PUT/DELETE | `/api/budgets[/:id]` | Unique per category and period |
 | GET | `/api/recurring` | Rules with their next occurrence; active first, due first within each group |
 | POST/PUT/DELETE | `/api/recurring[/:id]` | `frequency` (WEEK/MONTH/YEAR) × `interval` (1–12), optional `endDate`; `PUT` also takes `active` to pause/resume; `POST` accepts `clientId` like transactions |
-| GET/PUT | `/api/profile` | Name and currency |
+| GET/PUT | `/api/profile` | Name, currency and display preferences (`defaultPeriod` day/week/month/year, `firstDayOfWeek` day name, `decimalSeparator` `.` or `,`) |
 | PUT | `/api/password` | Change the password; verifies the current one (400, never 401, on mismatch) |
 | POST | `/api/transactions` | Accepts an optional `clientId`; a replay returns `200` with the stored row instead of creating a second one |
 
@@ -161,8 +161,10 @@ Only the account named by `SEED_EMAIL` is ever read or written.
     `23:59:59.999` UTC) or a full ISO timestamp.
   - The frontend sends `today=YYYY-MM-DD` on `/analytics` and `/budgets`: the
     windows that depend on "now" are anchored to the user's own calendar day
-    instead of the server's. Real instants (`createdAt`) are still returned as
-    full timestamps and displayed in local time.
+    instead of the server's. `/budgets` also takes `weekStart=<DAY>` so the
+    weekly window opens on the configured first day of the week (Monday when
+    absent). Real instants (`createdAt`) are still returned as full timestamps
+    and displayed in local time.
 - **Rate limiting.** `/auth` counts only failed attempts (30 per 15 min per IP,
   `AUTH_RATE_LIMIT_MAX` to override) so logging in never consumes the budget;
   the rest of the API allows 600 requests per minute per IP
