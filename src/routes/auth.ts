@@ -19,7 +19,8 @@ const DEFAULT_CATEGORIES = [
   { name: 'Transport', type: 'EXPENSE', color: '#FBBC04' },
   { name: 'Entertainment', type: 'EXPENSE', color: '#A142F4' },
   { name: 'Housing', type: 'EXPENSE', color: '#5F6368' },
-  { name: 'Shopping', type: 'EXPENSE', color: '#E8710A' }
+  { name: 'Shopping', type: 'EXPENSE', color: '#E8710A' },
+  { name: 'Others', type: 'EXPENSE', color: '#78909C' }
 ]
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/

@@ -1,7 +1,8 @@
 // Seeds a test account with six months of realistic activity, so every screen
 // has something to show: the dashboard, the analytics ranges, the category
 // totals, the budget progress bars (both under and over the limit) and the
-// transaction list with its filters and search.
+// transaction list with its filters and search, and the recurring screen with
+// two rules.
 //
 //   npm run db:seed            # skips (exit 0) when the account already has data
 //   npm run db:seed -- --reset # wipes that account's data first
@@ -43,7 +44,8 @@ const CATEGORIES = [
   { name: 'Transport', type: 'EXPENSE', color: '#FBBC04' },
   { name: 'Entertainment', type: 'EXPENSE', color: '#A142F4' },
   { name: 'Housing', type: 'EXPENSE', color: '#5F6368' },
-  { name: 'Shopping', type: 'EXPENSE', color: '#E8710A' }
+  { name: 'Shopping', type: 'EXPENSE', color: '#E8710A' },
+  { name: 'Others', type: 'EXPENSE', color: '#78909C' }
 ]
 
 // A seeded generator, so the same command always produces the same data. That
@@ -126,7 +128,7 @@ async function wipeUser(prisma, userId) {
   )
 }
 
-function buildTransactions(categoriesByName, startDate) {
+function buildTransactions(categoriesByName, startDate, recurringIds) {
   const rows = []
 
   for (let m = 0; m < CONFIG.months; m++) {
@@ -140,25 +142,32 @@ function buildTransactions(categoriesByName, startDate) {
       : new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate()
 
     const add = (dateOfMonth, name, amount, description) => {
-      if (dateOfMonth > lastDay) return
-      rows.push({
+      if (dateOfMonth > lastDay) return null
+      const row = {
         date: atNoon(new Date(monthStart.getFullYear(), monthStart.getMonth(), dateOfMonth)),
         categoryId: categoriesByName[name].id,
         type: categoriesByName[name].type,
         amount: toCents(amount),
         description: description || pick(DESCRIPTIONS[name])
-      })
+      }
+      rows.push(row)
+      return row
     }
 
     // ── income: salary on the 1st, the odd freelance invoice ──
-    add(1, 'Salary', 3200, 'Monthly salary')
+    // The salary and the rent are the two seeded recurring rules' handiwork
+    // (see buildRecurringRules): tag them so the transactions list shows the
+    // repeat icon on the movements those rules produced.
+    const salary = add(1, 'Salary', 3200, 'Monthly salary')
+    if (salary) salary.recurringId = recurringIds.salary
     for (let i = 0; i < intBetween(1, 2); i++) {
       add(intBetween(3, 26), 'Freelance', between(180, 850))
     }
     if (random() > 0.75) add(intBetween(8, 24), 'Sales', between(20, 140))
 
     // ── fixed housing, on slightly different days each month ──
-    add(3, 'Housing', 950, 'Rent')
+    const rent = add(3, 'Housing', 950, 'Rent')
+    if (rent) rent.recurringId = recurringIds.rent
     add(10, 'Housing', between(55, 130))
     add(18, 'Housing', between(30, 45))
 
@@ -196,6 +205,49 @@ function buildBudgets(categoriesByName) {
     period: b.period,
     amount: toCents(b.amount)
   }))
+}
+
+// The next upcoming occurrence of a monthly schedule, strictly after today
+// (counted in UTC, like the API's utcToday): the month's movements are already
+// seeded as history, so leaving a due date behind would make the API's
+// catch-up pass materialize duplicates on the first login.
+function nextAfterToday(anchor) {
+  const anchorDay = anchor.getUTCDate()
+  const today = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()))
+  let next = anchor
+  while (next <= today) {
+    const total = next.getUTCMonth() + 1
+    const year = next.getUTCFullYear() + Math.floor(total / 12)
+    const month = total % 12
+    const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+    next = new Date(Date.UTC(year, month, Math.min(anchorDay, lastDay)))
+  }
+  return next
+}
+
+// Two rules, one per side of the ledger, mirroring the movements every month
+// already carries: the salary on the 1st and the rent on the 3rd.
+function buildRecurringRules(categoriesByName, startDate) {
+  const rule = (name, dayOfMonth, amount, description) => {
+    const start = new Date(Date.UTC(startDate.getFullYear(), startDate.getMonth(), dayOfMonth))
+    return {
+      categoryId: categoriesByName[name].id,
+      type: categoriesByName[name].type,
+      amount: toCents(amount),
+      description,
+      frequency: 'MONTH',
+      interval: 1,
+      startDate: start,
+      endDate: null,
+      nextDate: nextAfterToday(start),
+      active: true
+    }
+  }
+
+  return {
+    salary: rule('Salary', 1, 3200, 'Monthly salary'),
+    rent: rule('Housing', 3, 950, 'Rent')
+  }
 }
 
 async function main() {
@@ -240,7 +292,17 @@ async function main() {
   const categories = await prisma.category.findMany({ where: { userId: user.id } })
   const byName = Object.fromEntries(categories.map(c => [c.name, c]))
 
-  const transactions = buildTransactions(byName, startDate)
+  const rules = buildRecurringRules(byName, startDate)
+  const salaryRule = await prisma.recurringRule.create({
+    data: { ...rules.salary, userId: user.id }
+  })
+  const rentRule = await prisma.recurringRule.create({ data: { ...rules.rent, userId: user.id } })
+  console.log('  2 recurring rules (salary, rent)')
+
+  const transactions = buildTransactions(byName, startDate, {
+    salary: salaryRule.id,
+    rent: rentRule.id
+  })
   // Chunked so the statement stays small on libSQL.
   const CHUNK = 200
   for (let i = 0; i < transactions.length; i += CHUNK) {

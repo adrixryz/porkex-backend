@@ -15,7 +15,7 @@ await withServer('api', async ({ call, check, state }) => {
   state.token = r.data.token
 
   const cats = (await call('GET', '/api/categories')).data
-  check('categorías sembradas', cats.length === 8, `${cats.length}`)
+  check('categorías sembradas', cats.length === 9, `${cats.length}`)
   check(
     'categorías con contadores y sin _count',
     cats.every(

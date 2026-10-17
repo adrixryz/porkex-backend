@@ -19,7 +19,7 @@ await withServer('auth', async ({ call, check, state, base }) => {
   state.token = r.data.token
 
   const cats = (await call('GET', '/api/categories')).data
-  check('register siembra las 8 categorias', cats.length === 8, `${cats.length}`)
+  check('register siembra las 9 categorias', cats.length === 9, `${cats.length}`)
 
   r = await call('POST', '/auth/register', {
     name: 'Ana',

@@ -82,7 +82,7 @@ Public:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/auth/register` | Creates the user, seeds 8 default categories, returns a JWT |
+| POST | `/auth/register` | Creates the user, seeds 9 default categories, returns a JWT |
 | POST | `/auth/login` | Returns a JWT and the user |
 | GET | `/health` | Pings the database: `200 { status: "ok", db: "up" }` or `503 { status: "degraded", db: "down" }` |
 
@@ -121,7 +121,8 @@ seed@porkex.test / porkex123
 
 It generates a monthly salary, the odd freelance invoice, rent and utilities,
 and variable Food / Transport / Entertainment / Shopping spending, plus three
-monthly and two weekly budgets (which land both under and over their limit).
+monthly and two weekly budgets (which land both under and over their limit) and
+the two recurring rules behind the salary and the rent.
 The random generator is seeded, so the same command always produces the same
 data — "the analytics look wrong" is a real signal instead of noise.
 
