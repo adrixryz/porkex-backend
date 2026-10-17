@@ -125,10 +125,32 @@ await withServer('recurring', async ctx => {
     `next=${r.data.nextDate}`
   )
 
+  r = await createRule({ description: 'Daily', frequency: 'DAY' })
+  txs = await txOf(r.data.id)
+  check(
+    'regla diaria: generada hoy y nextDate = +1 día',
+    r.status === 201 && txs.length === 1 && toISO(new Date(r.data.nextDate)) === toISO(utcDay(1)),
+    `next=${r.data.nextDate}`
+  )
+
+  r = await createRule({ description: 'Every 2 days', frequency: 'DAY', interval: 2 })
+  check(
+    'intervalo 2 días: nextDate = hoy + 2 días',
+    r.status === 201 && toISO(new Date(r.data.nextDate)) === toISO(utcDay(2)),
+    `next=${r.data.nextDate}`
+  )
+
   r = await createRule({ description: 'Bi-monthly', interval: 2 })
   check(
     'intervalo 2: nextDate = hoy + 2 meses',
     r.status === 201 && toISO(new Date(r.data.nextDate)) === toISO(monthlyOccurrences(today, 3)[2]),
+    `next=${r.data.nextDate}`
+  )
+
+  r = await createRule({ description: 'Max interval', frequency: 'WEEK', interval: 24 })
+  check(
+    'intervalo máximo (24): aceptado y nextDate = hoy + 24 semanas',
+    r.status === 201 && toISO(new Date(r.data.nextDate)) === toISO(utcDay(168)),
     `next=${r.data.nextDate}`
   )
 
@@ -158,6 +180,17 @@ await withServer('recurring', async ctx => {
   await txList()
   await txList()
   check('catch-up repetido no duplica (índice único)', (await txOf(weeklyId)).length === stable)
+
+  r = await createRule({ description: 'Daily catch-up', frequency: 'DAY' })
+  const dailyId = r.data.id
+  ageRule(dailyId, utcDay(-3))
+  await txList()
+  const dailyDays = (await txOf(dailyId)).map(t => toISO(new Date(t.date))).sort()
+  check(
+    'catch-up diario: una ocurrencia por día vencido',
+    dailyDays.join() === [utcDay(-3), utcDay(-2), utcDay(-1), today].map(toISO).join(),
+    dailyDays.join()
+  )
 
   // ── Month-end clamp ─────────────────────────────────────────────────────
   const clampYear = today.getUTCFullYear() - 1
@@ -304,7 +337,7 @@ await withServer('recurring', async ctx => {
   const bad = [
     ['frecuencia desconocida', { frequency: 'DAILY' }],
     ['intervalo 0', { interval: 0 }],
-    ['intervalo 13', { interval: 13 }],
+    ['intervalo 25', { interval: 25 }],
     ['fin antes del inicio', { endDate: toISO(utcDay(-1)) }],
     ['categoría de otro tipo', { type: 'INCOME' }],
     ['sin descripción', { description: '   ' }],

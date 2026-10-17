@@ -99,7 +99,7 @@ Protected (Bearer token required):
 | GET | `/api/budgets` | `?period=WEEK\|MONTH` `&today=YYYY-MM-DD` `&weekStart=MONDAY..SUNDAY` (defaults to MONDAY); omit period for both |
 | POST/PUT/DELETE | `/api/budgets[/:id]` | Unique per category and period |
 | GET | `/api/recurring` | Rules with their next occurrence; active first, due first within each group |
-| POST/PUT/DELETE | `/api/recurring[/:id]` | `frequency` (WEEK/MONTH/YEAR) × `interval` (1–12), optional `endDate`; `PUT` also takes `active` to pause/resume; `POST` accepts `clientId` like transactions |
+| POST/PUT/DELETE | `/api/recurring[/:id]` | `frequency` (DAY/WEEK/MONTH/YEAR) × `interval` (1–24), optional `endDate`; `PUT` also takes `active` to pause/resume; `POST` accepts `clientId` like transactions |
 | GET/PUT | `/api/profile` | Name, currency and display preferences (`defaultPeriod` day/week/month/year, `firstDayOfWeek` day name, `decimalSeparator` `.` or `,`) |
 | PUT | `/api/password` | Change the password; verifies the current one (400, never 401, on mismatch) |
 | POST | `/api/transactions` | Accepts an optional `clientId`; a replay returns `200` with the stored row instead of creating a second one |
@@ -190,8 +190,8 @@ Only the account named by `SEED_EMAIL` is ever read or written.
   duplicate a movement. `@@unique([userId, clientId])` is scoped by user, and a
   `P2002` from a lost race is turned back into the same `200`. Recurring rules
   work the same way.
-- **Recurring rules materialize into normal transactions.** A rule (every 1–12
-  weeks/months/years) becomes real `Transaction` rows, so the dashboard,
+- **Recurring rules materialize into normal transactions.** A rule (every 1–24
+  days/weeks/months/years) becomes real `Transaction` rows, so the dashboard,
   analytics, budgets and the transactions list keep reading plain rows. There is
   no scheduler: every authenticated request first runs a catch-up of whatever
   came due — a single indexed `SELECT` when nothing is — which also covers days

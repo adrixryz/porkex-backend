@@ -17,7 +17,7 @@ import { prisma } from './prisma'
 import { isUniqueViolation } from './errors'
 import { addDays, utcToday } from './dates'
 
-export const RECURRING_FREQUENCIES = ['WEEK', 'MONTH', 'YEAR'] as const
+export const RECURRING_FREQUENCIES = ['DAY', 'WEEK', 'MONTH', 'YEAR'] as const
 export type RecurringFrequency = (typeof RECURRING_FREQUENCIES)[number]
 
 export function parseFrequency(v: unknown): RecurringFrequency | null {
@@ -31,14 +31,15 @@ export function parseFrequency(v: unknown): RecurringFrequency | null {
 const MAX_PER_PASS = 100
 
 // The forward walk used when a rule's start date is far in the past. Two
-// centuries of weekly occurrences fit; nothing real gets close.
+// centuries of weekly occurrences fit — decades of daily ones; nothing real
+// gets close.
 const MAX_WALK = 10_000
 
 /**
  * The occurrence after `current`, keeping the rule's anchor day.
  *
- * Weeks are plain 7-day steps. Months recompute the day from the anchor, so a
- * rule on the 31st lands on Feb 28 (29 in leap years) and returns to the 31st
+ * Days and weeks are plain steps. Months recompute the day from the anchor, so
+ * a rule on the 31st lands on Feb 28 (29 in leap years) and returns to the 31st
  * in March, instead of drifting earlier and earlier.
  */
 export function nextOccurrence(
@@ -47,6 +48,7 @@ export function nextOccurrence(
   interval: number,
   anchorDay: number
 ): Date {
+  if (frequency === 'DAY') return addDays(current, interval)
   if (frequency === 'WEEK') return addDays(current, 7 * interval)
 
   const months = frequency === 'MONTH' ? interval : 12 * interval

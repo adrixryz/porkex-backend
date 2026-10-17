@@ -1174,7 +1174,7 @@ router.delete('/budgets/:id', async (req: AuthRequest, res) => {
 })
 
 // ── RECURRING ──────────────────────────────────────────
-const MAX_RECURRING_INTERVAL = 12
+const MAX_RECURRING_INTERVAL = 24
 
 function parseInterval(v: unknown): number | null {
   if (v === undefined || v === null || v === '') return 1
@@ -1226,7 +1226,7 @@ async function validateRecurringInput(
   }
 
   const frequency = parseFrequency(body.frequency)
-  if (!frequency) return { error: 'Frequency must be WEEK, MONTH or YEAR.' }
+  if (!frequency) return { error: 'Frequency must be DAY, WEEK, MONTH or YEAR.' }
 
   const interval = parseInterval(body.interval)
   if (interval === null) {
