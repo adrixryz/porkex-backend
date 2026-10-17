@@ -7,7 +7,7 @@ The frontend lives in `../porkex-web-app` and talks to this server through the
 
 ## Requirements
 
-- Node 20+
+- Node 24+
 - A `.env` file (see below)
 
 ## Getting started
@@ -15,7 +15,7 @@ The frontend lives in `../porkex-web-app` and talks to this server through the
 ```bash
 cp .env.example .env      # then set JWT_SECRET
 npm install               # postinstall runs `prisma generate`
-npm run db:push           # creates prisma/dev.db from the schema
+npm run db:apply          # creates prisma/dev.db using versioned migrations
 npm run dev               # http://localhost:3000
 ```
 
@@ -27,6 +27,10 @@ in the source. Generate one with:
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
+Registration is closed by default. To prepare a new personal account, temporarily
+set `ALLOW_REGISTRATION=true`, restart the API and register through the frontend.
+Then set it back to `false` and restart. Existing accounts can still sign in.
+
 This API runs against a hosted [Turso](https://turso.tech) database (libSQL) in
 production and a local SQLite file in development, with no code change: put the
 `libsql://` URL and the auth token in `DATABASE_URL` and `TURSO_AUTH_TOKEN`. The
@@ -37,18 +41,20 @@ inside the URL, never in the code or the schema.
 
 | Script | What it does |
 | --- | --- |
-| `npm run dev` | Dev server with nodemon + ts-node |
+| `npm run dev` | Dev server with Node's built-in watch mode + ts-node |
 | `npm run build` | Compiles TypeScript to `dist/` |
 | `npm start` | Builds, then runs `dist/index.js` |
 | `npm test` | Integration tests (`tests/run.mjs`) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
 | `npm run format` | Prettier |
-| `npm run db:push` | Applies `schema.prisma` with the Prisma CLI. **Local files only** |
-| `npm run db:apply` | Applies the schema to whatever `DATABASE_URL` points at, including Turso |
+| `npm run db:push` | Prisma CLI for disposable local experiments; bypasses migration history |
+| `npm run db:apply` | Applies checksummed SQL migrations to local SQLite or Turso |
+| `npm run db:check` | Checks migrations against `schema.prisma` offline; never connects to the configured database |
 | `npm run db:seed` | Fills a test account with six months of realistic data |
 | `npm run db:studio` | Prisma Studio |
-| `npm run db:backup` | Timestamped copy of the database in `prisma/backups/` |
+| `npm run db:backup` | Verified SQLite snapshot of the configured local database or Turso, in `prisma/backups/` |
+| `npm run db:verify-backup -- path.db` | Restores a backup to a temporary local copy and verifies it |
 | `npm run check:currencies` | Fails if the currency list drifts from the frontend |
 
 ## Structure
@@ -57,7 +63,7 @@ inside the URL, never in the code or the schema.
 src/
   index.ts          App wiring, /health probe, JSON 404 and error handlers
   lib/
-    prisma.ts       Client singleton (survives nodemon reloads)
+    prisma.ts       Client singleton
     money.ts        Cents <-> amounts conversion
     dates.ts        Calendar-day helpers (all math in UTC)
     recurring.ts    Recurring-rule schedule and catch-up materialization
@@ -72,6 +78,7 @@ src/
     api.ts          Everything else, all behind auth
 prisma/
   schema.prisma     User, Category, Budget, Transaction, RecurringRule
+  migrations/       Immutable, ordered SQL migrations
 scripts/            Maintenance scripts
 tests/              Integration tests
 ```
@@ -82,7 +89,8 @@ Public:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/auth/register` | Creates the user, seeds 9 default categories, returns a JWT |
+| GET | `/auth/config` | Returns `{ registrationEnabled }` so the frontend can hide registration |
+| POST | `/auth/register` | When enabled, creates the user, seeds 9 default categories and returns a JWT; otherwise `403` |
 | POST | `/auth/login` | Returns a JWT and the user |
 | GET | `/health` | Pings the database: `200 { status: "ok", db: "up" }` or `503 { status: "degraded", db: "down" }` |
 
@@ -107,8 +115,63 @@ Protected (Bearer token required):
 ## Testing
 
 `npm test` boots the real server against a throwaway SQLite database in the
-system temp directory, runs every `*.test.mjs` suite, then tears it down. There
-is no mocking: assertions go through actual HTTP requests.
+system temp directory, applies the real migration chain, runs every `*.test.mjs`
+suite, then tears it down. API tests use real HTTP requests; focused suites also
+check calendar math, backups, migrations and harness failure cleanup. Database
+URLs, Turso tokens and the test JWT secret are forced to isolated values even
+when a local `.env` points at production. CI runs build, schema checks and tests
+on Node 24, on Linux and Windows.
+
+## Backups and migrations
+
+`npm run db:backup` loads the backend's `.env` and reads the configured database
+in one consistent read transaction. It works with both `file:` and `libsql://`
+URLs. Relative file paths resolve from the backend root, just like the app when
+started there. A missing local source fails instead of creating an empty file.
+
+The output is a standalone SQLite database, preserving table definitions,
+indexes, views, triggers, IDs, autoincrement sequences and raw SQL values. The
+script checks copied rows, foreign keys and SQLite integrity before publishing
+the final filename. Interrupted or failed copies are never published as backups.
+An existing destination is never overwritten. For a chosen path:
+
+```bash
+npm run db:backup -- --output prisma/backups/before-migration.db
+npm run db:verify-backup -- prisma/backups/before-migration.db
+```
+
+Verification restores the file into a temporary local directory, checks its
+integrity and relationships, and reads every table. It never changes the source
+backup or contacts Turso. Backups contain private account data and password
+hashes; the backup directory is ignored by Git. Keep a verified copy on separate
+storage as well.
+
+For local recovery, stop the server, copy the verified backup to a **new** path
+such as `prisma/restored.db`, point `DATABASE_URL` at `file:./prisma/restored.db`,
+and run `npm run db:apply` before starting the API. Check the recovered data before
+replacing the original file. Production recovery is a separate operation: import
+the verified SQLite snapshot into a replacement Turso database, validate it and
+then update the service configuration. These scripts never upload or restore
+over the hosted database.
+
+`npm run db:apply` is the supported schema workflow for both environments:
+
+- SQL files in `prisma/migrations/` are ordered and checksummed. Applied IDs,
+  checksums and UTC timestamps live in `_PorkexMigration`. Never edit an applied
+  migration; add a new directory and SQL file instead.
+- An existing installation can adopt the original canonical schema or the known
+  historical variant lacking the `Transaction.recurringId` foreign key. That
+  variant is rebuilt transactionally, preserving rows, IDs and sequences.
+- Unknown drift in columns, defaults, constraints, indexes or migration history
+  stops the operation without changes. A failing migration rolls back the whole
+  invocation, including the ledger and any baseline adoption.
+- `npm run db:check` compares the full migration chain with `schema.prisma`
+  entirely offline. Run it after changing either. The same check runs before
+  applying migrations; a model change without a migration is rejected.
+
+Create and verify a backup before applying migrations to your hosted database.
+`prisma db push` is reserved for disposable local experiments; it does not update
+the migration ledger and can leave a database the runner will refuse to adopt.
 
 ## Test data
 
@@ -158,6 +221,11 @@ Only the account named by `SEED_EMAIL` is ever read or written.
   and every computation (month/week buckets, ranges, budget windows) is done in
   UTC with `getUTC*`/`Date.UTC`, so a day can never shift because of the
   server's or the device's timezone.
+  - The frontend sends its IANA timezone in `X-Porkex-Time-Zone`, for example
+    `America/Lima`. The backend uses it only to choose the user's current
+    calendar day for recurrent operations and date checks; internal dates and
+    arithmetic stay in UTC. If absent, the zone defaults to `America/Lima`;
+    an invalid zone is rejected with `400`.
   - `from`/`to` accept either `YYYY-MM-DD` (the whole day, `00:00:00.000` to
     `23:59:59.999` UTC) or a full ISO timestamp.
   - The frontend sends `today=YYYY-MM-DD` on `/analytics` and `/budgets`: the
@@ -175,6 +243,8 @@ Only the account named by `SEED_EMAIL` is ever read or written.
   has no exact decimal type — a Prisma `Decimal` is stored as `REAL`, which is
   the same lossy double. Handlers accumulate in cents and convert only when
   writing the JSON response (`src/lib/money.ts`).
+  Inputs must be numbers or decimal strings with at most two decimal places;
+  booleans, arrays, objects and excess precision are rejected.
 - **The database is reached through the libSQL driver adapter** (`src/lib/prisma.ts`),
   which is what lets the same schema talk to a local file and to a hosted Turso
   database. Switch by changing `DATABASE_URL` (and `TURSO_AUTH_TOKEN`) only.
@@ -194,39 +264,28 @@ Only the account named by `SEED_EMAIL` is ever read or written.
   days/weeks/months/years) becomes real `Transaction` rows, so the dashboard,
   analytics, budgets and the transactions list keep reading plain rows. There is
   no scheduler: every authenticated request first runs a catch-up of whatever
-  came due — a single indexed `SELECT` when nothing is — which also covers days
+  came due — one small active-rule read when nothing is — which also covers days
   the free-tier server spent asleep. `@@unique([recurringId, date])` makes the
   pass idempotent, so a replay or a race cannot materialize a date twice.
+  - `X-Porkex-Recurring-State` reports `ready`, `pending` (catch-up has more work)
+    or `failed` (the response may be missing due movements). The frontend can
+    report incomplete totals and retry. CORS exposes this response header.
+  - A UTC watermark preserves processed occurrences even if the generated
+    movement is deleted. Non-schedule edits preserve the cursor, so changing a
+    description cannot recreate a deleted expense. The initial migration
+    backfills the watermark from existing linked movements only.
+  - Migration 003 converts known epoch-millisecond/UTC text DateTime storage to
+    the UTC format used by the adapter so SQL ranges include legacy records.
+    It preserves instants and stops with a full rollback for unknown or invalid
+    date encodings; take a verified backup before applying migrations.
   - A rule created, edited or resumed today starts at the next occurrence that
     has not passed (today itself counts) — nothing is backfilled, and a pause is
     never filled in afterwards.
   - The rule's start day is the anchor: month occurrences that land on a date
     the target month does not have clamp to its last day (the 31st → Feb 28/29)
     and return to the anchor day afterwards, instead of drifting earlier.
-  - Deleting a rule keeps the movements it already created, as plain history
-    (`recurringId` is cleared in the delete route: the additive `db:apply` tool
-    cannot add a foreign key to an existing production table).
-- There are no Prisma migrations. The schema is applied by pushing it, and
-  `db push` is the intended local workflow.
-- **`prisma db push` cannot target a hosted database.** The Prisma CLI reads
-  the datasource URL itself and its SQLite connector only accepts `file:`, so
-  it rejects a `libsql://` URL with *"the URL must start with the protocol
-  file:"*. The CLI does not go through the driver adapter, so the adapter the
-  app uses makes no difference. For a hosted database use `npm run db:apply`:
-  it asks Prisma to diff the schema against an empty database (pure codegen, no
-  connection needed) and runs the resulting SQL through `@libsql/client`, which
-  does speak `libsql://`.
-- **`db:apply` brings a database up to date with the schema, additively.**
-  - Missing tables and indexes are created.
-  - **Missing columns are added with `ALTER TABLE ... ADD COLUMN`**, so adding a
-    field to a model and redeploying is enough.
-  - Columns that exist in the database but not in the schema are reported and
-    left alone. Nothing is ever dropped.
-  - SQLite cannot add a `NOT NULL` column with no default to a table that
-    already has rows, and it cannot drop or rename columns. When that happens
-    the script stops with the exact statement and the reason, and the data has
-    to be recreated. Give the new field a default (`@default("")`) if it has to
-    be required, or make it optional.
+  - Deleting a rule keeps the movements it already created as plain history;
+    their `recurringId` becomes null.
 - Access tokens have no `expiresIn`: a session ends when the user logs out.
   This is deliberate for a single-user app — being asked to log in again on the
   phone is worse than the (small, personal) window a leaked token would open.

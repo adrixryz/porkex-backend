@@ -3,7 +3,7 @@
 //
 // Each test file uses:  await withServer(async (ctx) => { ... })
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,7 +11,6 @@ import net from 'node:net'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const BACKEND_DIR = resolve(HERE, '..')
-const TMP_DIR = join(tmpdir(), 'porkex-tests')
 
 function freePort() {
   return new Promise((resolvePort, reject) => {
@@ -25,8 +24,9 @@ function freePort() {
   })
 }
 
-async function waitForServer(base, attempts = 60) {
+async function waitForServer(base, server, attempts = 60) {
   for (let i = 0; i < attempts; i++) {
+    if (server.exitCode !== null || server.signalCode !== null || !server.pid) return false
     try {
       await fetch(`${base}/api/dashboard`)
       return true
@@ -46,47 +46,34 @@ async function waitForServer(base, attempts = 60) {
  * rate limit so the 429 path can be tested without 30 requests).
  */
 export async function withServer(name, run, extraEnv = {}) {
-  mkdirSync(TMP_DIR, { recursive: true })
-  const stamp = `${name}-${process.pid}-${Date.now()}`
-  const dbFile = join(TMP_DIR, `${stamp}.db`)
-  rmSync(dbFile, { force: true })
-
+  const tempDir = mkdtempSync(join(tmpdir(), `porkex-${name}-`))
+  const dbFile = join(tempDir, 'test.db')
   const databaseUrl = `file:${dbFile.replace(/\\/g, '/')}`
-  const env = { ...process.env, DATABASE_URL: databaseUrl, JWT_SECRET: 'test-secret', ...extraEnv }
-
-  const push = spawnSync('npx prisma db push --skip-generate', {
-    cwd: BACKEND_DIR,
-    env,
-    stdio: 'ignore',
-    shell: true
-  })
-  if (push.status !== 0) {
-    throw new Error(
-      `prisma db push failed (status ${push.status}). Run it manually with DATABASE_URL=${databaseUrl}`
-    )
+  const env = {
+    ...process.env,
+    ALLOW_REGISTRATION: 'true',
+    ...extraEnv,
+    // A suite may change rate limits, never redirect tests to a real database.
+    DATABASE_URL: databaseUrl,
+    TURSO_AUTH_TOKEN: '',
+    JWT_SECRET: 'test-secret'
   }
 
-  const port = await freePort()
-  const base = `http://localhost:${port}`
-  const server = spawn('node', ['-r', 'ts-node/register/transpile-only', 'src/index.ts'], {
-    cwd: BACKEND_DIR,
-    env: { ...env, PORT: String(port) },
-    stdio: ['ignore', 'pipe', 'pipe']
-  })
-
+  let server
   const logs = []
-  server.stdout.on('data', d => logs.push(String(d)))
-  server.stderr.on('data', d => logs.push(String(d)))
-
   const state = { token: '' }
   const results = []
-
-  const call = async (method, route, body) => {
+  let base
+  const call = async (method, route, body, headers = {}) => {
     const res = await fetch(base + route, {
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
+        ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
+        // Existing suites use UTC calendar fixtures; timezone regressions pass
+        // an explicit device zone through this fourth argument.
+        'X-Porkex-Time-Zone': 'UTC',
+        ...headers
       },
       ...(body ? { body: JSON.stringify(body) } : {})
     })
@@ -96,7 +83,7 @@ export async function withServer(name, run, extraEnv = {}) {
     } catch {
       /* empty or non-JSON body */
     }
-    return { status: res.status, data, contentType: res.headers.get('content-type') }
+    return { status: res.status, data, contentType: res.headers.get('content-type'), headers: res.headers }
   }
 
   const check = (label, ok, extra = '') => {
@@ -105,14 +92,11 @@ export async function withServer(name, run, extraEnv = {}) {
 
   const stopServer = () =>
     new Promise(resolveStop => {
-      if (server.exitCode !== null) return resolveStop()
-      server.once('close', () => resolveStop())
+      if (!server?.pid || server.exitCode !== null || server.signalCode !== null) return resolveStop()
+      const timer = setTimeout(() => server.kill('SIGKILL'), 2000)
+      server.once('close', () => { clearTimeout(timer); resolveStop() })
       server.kill()
       // Windows keeps the SQLite file locked until the process is really gone.
-      setTimeout(() => {
-        server.kill('SIGKILL')
-        resolveStop()
-      }, 2000)
     })
 
   const cleanup = async () => {
@@ -120,15 +104,31 @@ export async function withServer(name, run, extraEnv = {}) {
     for (const suffix of ['', '-journal', '-wal', '-shm']) {
       rmSync(dbFile + suffix, { force: true })
     }
-  }
-
-  const ready = await waitForServer(base)
-  if (!ready) {
-    await cleanup()
-    throw new Error(`Server did not start on port ${port}.\n${logs.join('')}`)
+    rmSync(tempDir, { recursive: true, force: true })
   }
 
   try {
+    const apply = spawnSync(process.execPath, ['scripts/apply-schema.js'], {
+      cwd: BACKEND_DIR,
+      env,
+      encoding: 'utf8'
+    })
+    if (apply.error || apply.status !== 0) {
+      throw new Error(`Database preparation failed (status ${apply.status}): ${apply.error?.message ?? ''}\n${apply.stdout}\n${apply.stderr}`)
+    }
+    const port = await freePort()
+    base = `http://localhost:${port}`
+    server = spawn(process.execPath, ['-r', 'ts-node/register/transpile-only', 'src/index.ts'], {
+      cwd: BACKEND_DIR,
+      env: { ...env, PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    server.stdout.on('data', data => logs.push(String(data)))
+    server.stderr.on('data', data => logs.push(String(data)))
+    server.on('error', error => logs.push(error.message))
+    if (!(await waitForServer(base, server))) {
+      throw new Error(`Server did not start on port ${port}.\n${logs.join('')}`)
+    }
     await run({ call, check, results, state, base, dbFile })
   } finally {
     await cleanup()

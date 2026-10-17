@@ -21,7 +21,11 @@ const failedFiles = []
 for (const file of files) {
   console.log(`\n─── ${file} ${'─'.repeat(Math.max(0, 50 - file.length))}`)
   const code = await new Promise(resolveExit => {
-    const child = spawn('node', [join(HERE, file)], { stdio: 'inherit' })
+    const child = spawn(process.execPath, [join(HERE, file)], { stdio: 'inherit' })
+    child.on('error', error => {
+      console.error(`Could not start ${file}: ${error.message}`)
+      resolveExit(1)
+    })
     child.on('close', resolveExit)
   })
   if (code === 0) passed++

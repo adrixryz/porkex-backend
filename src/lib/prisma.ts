@@ -29,7 +29,7 @@ function createAdapter() {
   return new PrismaLibSQL(client)
 }
 
-// Singleton: avoids multiple connections in dev (nodemon/ts-node reload modules).
+// Singleton: avoids multiple connections in dev (Node watch/ts-node reload modules).
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter: createAdapter() })
