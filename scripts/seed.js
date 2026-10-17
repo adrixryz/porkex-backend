@@ -1,28 +1,30 @@
-// Seeds a test account with six months of realistic activity, so every screen
+// Seeds a test account with 24 months of realistic activity, so every screen
 // has something to show: the dashboard, the analytics ranges, the category
 // totals, the budget progress bars (both under and over the limit) and the
 // transaction list with its filters and search, and the recurring screen with
-// two rules.
+// four rules, tags and next-only exceptions.
 //
-//   npm run db:seed            # skips (exit 0) when the account already has data
+//   npm run db:seed            # skips (exit 0) when the account already exists
 //   npm run db:seed -- --reset # wipes that account's data first
 //
 // Configuration, all optional:
 //   SEED_EMAIL     default seed@porkex.test
 //   SEED_PASSWORD  default porkex123
 //   SEED_NAME      default Porkex Tester
-//   SEED_MONTHS    default 6
+//   SEED_MONTHS    default 24 (1–120)
 //   SEED_CURRENCY  default USD
+//   SEED_TIME_ZONE default America/Lima (calendar day; dates are stored in UTC)
 //
 // It writes to whatever DATABASE_URL points at, so running it locally fills
 // prisma/dev.db and running it on Render fills Turso. Only the account named by
 // SEED_EMAIL is ever touched.
 const { PrismaClient } = require('@prisma/client')
 const { PrismaLibSQL } = require('@prisma/adapter-libsql')
-const { createClient } = require('@libsql/client')
+const { randomUUID } = require('node:crypto')
+const { loadEnvironment, databaseConfig, createClient, safeError } = require('./lib/database')
 const bcrypt = require('bcryptjs')
 
-require('dotenv').config()
+loadEnvironment()
 
 const RESET = process.argv.includes('--reset')
 
@@ -30,8 +32,9 @@ const CONFIG = {
   email: (process.env.SEED_EMAIL || 'seed@porkex.test').toLowerCase(),
   password: process.env.SEED_PASSWORD || 'porkex123',
   name: process.env.SEED_NAME || 'Porkex Tester',
-  months: Number(process.env.SEED_MONTHS || 6),
-  currency: process.env.SEED_CURRENCY || 'USD'
+  months: Number(process.env.SEED_MONTHS || 24),
+  currency: process.env.SEED_CURRENCY || 'USD',
+  timeZone: process.env.SEED_TIME_ZONE || 'America/Lima'
 }
 
 // Same categories the registration endpoint seeds, so the account looks like a
@@ -65,13 +68,17 @@ const pick = list => list[Math.floor(random() * list.length)]
 // Amounts live in the database as whole cents.
 const toCents = amount => Math.round(amount * 100)
 
-const day = new Date()
-day.setHours(12, 0, 0, 0)
-const atNoon = d => {
-  const copy = new Date(d)
-  copy.setHours(12, 0, 0, 0)
-  return copy
+function calendarToday(timeZone, now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(now)
+  const value = type => Number(parts.find(part => part.type === type).value)
+  return new Date(Date.UTC(value('year'), value('month') - 1, value('day')))
 }
+const addDays = (date, count) => new Date(date.getTime() + count * 86400000)
 
 // Repeating descriptions keep the search box in TransactionsView meaningful.
 const DESCRIPTIONS = {
@@ -96,59 +103,52 @@ const DESCRIPTIONS = {
   Sales: ['Marketplace sale', 'Second hand sale']
 }
 
-function createClient_() {
-  const url = process.env.DATABASE_URL
-  if (!url) throw new Error('DATABASE_URL is not set.')
-  const authToken = process.env.TURSO_AUTH_TOKEN
-  return authToken ? createClient({ url, authToken }) : createClient({ url })
-}
-
 async function wipeUser(prisma, userId) {
-  // Sequential, and in dependency order: budgets and recurring rules both
-  // point at categories, transactions point at rules and categories, and
-  // everything points at the user. Running these concurrently let them
-  // interleave, which made the reported counts wrong.
+  // The caller wraps deletion and regeneration in one transaction. Cascades
+  // remove occurrence/tag links and aliases before the owning records go away.
   const rules = await prisma.recurringRule.deleteMany({ where: { userId } })
   const budgets = await prisma.budget.deleteMany({ where: { userId } })
   const transactions = await prisma.transaction.deleteMany({ where: { userId } })
+  const tags = await prisma.tag.deleteMany({ where: { userId } })
   const categories = await prisma.category.deleteMany({ where: { userId } })
-  const user = await prisma.user.deleteMany({ where: { id: userId } })
-
-  if (transactions.count === 0 && categories.count === 0) {
-    throw new Error(
-      `Tried to reset ${CONFIG.email} but deleted nothing, while the account still exists. ` +
-        `Something else is holding the data.`
-    )
+  await prisma.user.delete({ where: { id: userId } })
+  return {
+    rules: rules.count,
+    budgets: budgets.count,
+    transactions: transactions.count,
+    tags: tags.count,
+    categories: categories.count
   }
-
-  console.log(
-    `  removed ${transactions.count} transactions, ${budgets.count} budgets, ` +
-      `${rules.count} recurring rules, ${categories.count} categories, ` +
-      `${user.count} user(s)`
-  )
 }
 
-function buildTransactions(categoriesByName, startDate, recurringIds) {
+function buildTransactions(categoriesByName, startDate, recurringIds, day) {
   const rows = []
 
   for (let m = 0; m < CONFIG.months; m++) {
-    const monthStart = new Date(startDate.getFullYear(), startDate.getMonth() + m, 1)
+    const monthStart = new Date(
+      Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + m, 1)
+    )
     // Never past today: the API rejects future dates and the analytics window
     // ends now anyway.
     const isCurrentMonth =
-      monthStart.getMonth() === day.getMonth() && monthStart.getFullYear() === day.getFullYear()
+      monthStart.getUTCMonth() === day.getUTCMonth() &&
+      monthStart.getUTCFullYear() === day.getUTCFullYear()
     const lastDay = isCurrentMonth
-      ? day.getDate()
-      : new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate()
+      ? day.getUTCDate()
+      : new Date(
+          Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0)
+        ).getUTCDate()
 
     const add = (dateOfMonth, name, amount, description) => {
       if (dateOfMonth > lastDay) return null
       const row = {
-        date: atNoon(new Date(monthStart.getFullYear(), monthStart.getMonth(), dateOfMonth)),
+        date: new Date(
+          Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), dateOfMonth)
+        ),
         categoryId: categoriesByName[name].id,
         type: categoriesByName[name].type,
         amount: toCents(amount),
-        description: description || pick(DESCRIPTIONS[name])
+        description: description ?? pick(DESCRIPTIONS[name])
       }
       rows.push(row)
       return row
@@ -190,7 +190,41 @@ function buildTransactions(categoriesByName, startDate, recurringIds) {
     }
   }
 
-  return rows.sort((a, b) => a.date - b.date)
+  // Daily recent receipts give both weeks data even at month/year boundaries.
+  for (let offset = 1; offset <= 13; offset++) {
+    const date = addDays(day, -offset)
+    if (date >= startDate)
+      rows.push({
+        date,
+        categoryId: categoriesByName.Food.id,
+        type: 'EXPENSE',
+        amount: 450 + offset * 25,
+        description: 'Morning coffee'
+      })
+  }
+  // Always have recent data, including both optional-comment cases and tags
+  // at their five-selection limit, even when today is the first of the month.
+  rows.push({
+    date: day,
+    categoryId: categoriesByName.Food.id,
+    type: 'EXPENSE',
+    amount: 1876,
+    description: ''
+  })
+  rows.push({
+    date: day,
+    categoryId: categoriesByName.Sales.id,
+    type: 'INCOME',
+    amount: 3250,
+    description: ''
+  })
+  return rows
+    .sort((a, b) => a.date - b.date)
+    .map((row, index) => ({
+      ...row,
+      clientId: 'seed-row-' + index,
+      description: !row.recurringId && index % 6 === 0 ? '' : row.description
+    }))
 }
 
 function buildBudgets(categoriesByName) {
@@ -208,10 +242,10 @@ function buildBudgets(categoriesByName) {
 }
 
 // The next upcoming occurrence of a monthly schedule, strictly after today
-// (counted in UTC, like the API's utcToday): the month's movements are already
+// (the configured local day represented in UTC): the month's movements are already
 // seeded as history, so leaving a due date behind would make the API's
 // catch-up pass materialize duplicates on the first login.
-function nextAfterToday(anchor) {
+function nextAfterToday(anchor, day) {
   const anchorDay = anchor.getUTCDate()
   const today = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()))
   let next = anchor
@@ -227,9 +261,11 @@ function nextAfterToday(anchor) {
 
 // Two rules, one per side of the ledger, mirroring the movements every month
 // already carries: the salary on the 1st and the rent on the 3rd.
-function buildRecurringRules(categoriesByName, startDate) {
+function buildRecurringRules(categoriesByName, startDate, day) {
   const rule = (name, dayOfMonth, amount, description) => {
-    const start = new Date(Date.UTC(startDate.getFullYear(), startDate.getMonth(), dayOfMonth))
+    const start = new Date(
+      Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), dayOfMonth)
+    )
     return {
       categoryId: categoriesByName[name].id,
       type: categoriesByName[name].type,
@@ -239,7 +275,7 @@ function buildRecurringRules(categoriesByName, startDate) {
       interval: 1,
       startDate: start,
       endDate: null,
-      nextDate: nextAfterToday(start),
+      nextDate: nextAfterToday(start, day),
       active: true
     }
   }
@@ -250,84 +286,197 @@ function buildRecurringRules(categoriesByName, startDate) {
   }
 }
 
-async function main() {
-  const adapter = new PrismaLibSQL(createClient_())
-  const prisma = new PrismaClient({ adapter })
+const TAG_NAMES = [
+  'Essential',
+  'Work',
+  'Home',
+  'Daily',
+  'Leisure',
+  'Transport',
+  'Family',
+  'One-off'
+]
 
-  const startDate = new Date(day.getFullYear(), day.getMonth() - (CONFIG.months - 1), 1)
-
-  console.log(`Seeding ${CONFIG.email} with ${CONFIG.months} months of data`)
-  console.log(
-    `  window: ${startDate.toISOString().slice(0, 10)} -> ${day.toISOString().slice(0, 10)}`
-  )
-
-  const existing = await prisma.user.findUnique({ where: { email: CONFIG.email } })
-  if (existing) {
-    const count = await prisma.transaction.count({ where: { userId: existing.id } })
-    if (count > 0 && !RESET) {
-      // Skipping (rather than failing) keeps the Render build green: its build
-      // command runs this on every deploy, and an account with data is the
-      // normal state there, not an error. Nothing is ever wiped without --reset.
-      console.log(
-        `  skipped: ${CONFIG.email} already has ${count} transactions ` +
-          `(use --reset to wipe and regenerate)`
-      )
-      await prisma.$disconnect()
-      return
-    }
-    await wipeUser(prisma, existing.id)
-  }
-
-  const user = await prisma.user.create({
-    data: {
-      name: CONFIG.name,
-      email: CONFIG.email,
-      password: bcrypt.hashSync(CONFIG.password, 10),
-      currency: CONFIG.currency
-    }
-  })
-  console.log(`  user: ${user.email}`)
-
-  await prisma.category.createMany({ data: CATEGORIES.map(c => ({ ...c, userId: user.id })) })
-  const categories = await prisma.category.findMany({ where: { userId: user.id } })
+async function seedAccount(db, user, startDate, day) {
+  await db.category.createMany({ data: CATEGORIES.map(c => ({ ...c, userId: user.id })) })
+  const categories = await db.category.findMany({ where: { userId: user.id } })
   const byName = Object.fromEntries(categories.map(c => [c.name, c]))
+  const tags = TAG_NAMES.map((name, position) => ({
+    id: randomUUID(),
+    userId: user.id,
+    name,
+    normalizedName: name.toLowerCase(),
+    position
+  }))
+  await db.tag.createMany({ data: tags })
+  await db.tagReference.createMany({ data: tags.map(tag => ({ id: tag.id, tagId: tag.id })) })
+  const tagIds = names => names.map(name => tags.find(tag => tag.name === name).id)
 
-  const rules = buildRecurringRules(byName, startDate)
-  const salaryRule = await prisma.recurringRule.create({
-    data: { ...rules.salary, userId: user.id }
-  })
-  const rentRule = await prisma.recurringRule.create({ data: { ...rules.rent, userId: user.id } })
-  console.log('  2 recurring rules (salary, rent)')
-
-  const transactions = buildTransactions(byName, startDate, {
-    salary: salaryRule.id,
-    rent: rentRule.id
-  })
-  // Chunked so the statement stays small on libSQL.
-  const CHUNK = 200
-  for (let i = 0; i < transactions.length; i += CHUNK) {
-    await prisma.transaction.createMany({
-      data: transactions.slice(i, i + CHUNK).map(t => ({ ...t, userId: user.id }))
+  const templates = buildRecurringRules(byName, startDate, day)
+  const salary = await db.recurringRule.create({ data: { ...templates.salary, userId: user.id } })
+  const rent = await db.recurringRule.create({ data: { ...templates.rent, userId: user.id } })
+  const transactions = buildTransactions(
+    byName,
+    startDate,
+    { salary: salary.id, rent: rent.id },
+    day
+  )
+  const chunkSize = 200
+  for (let i = 0; i < transactions.length; i += chunkSize)
+    await db.transaction.createMany({
+      data: transactions.slice(i, i + chunkSize).map(row => ({ ...row, userId: user.id }))
     })
-  }
-  console.log(`  ${transactions.length} transactions`)
-
-  await prisma.budget.createMany({
-    data: buildBudgets(byName).map(b => ({ ...b, userId: user.id }))
+  const stored = await db.transaction.findMany({
+    where: { userId: user.id },
+    select: { id: true, clientId: true }
   })
-  console.log('  5 budgets (3 monthly, 2 weekly)')
+  const ids = new Map(stored.map(row => [row.clientId, row.id]))
+  const categoryTag = {
+    Salary: 'Work',
+    Freelance: 'Work',
+    Sales: 'One-off',
+    Food: 'Daily',
+    Housing: 'Home',
+    Transport: 'Transport',
+    Entertainment: 'Leisure',
+    Shopping: 'Family'
+  }
+  const links = transactions.flatMap((row, index) => {
+    const category = categories.find(category => category.id === row.categoryId)
+    const names =
+      index === transactions.length - 2
+        ? ['Essential', 'Daily', 'Home', 'Family', 'One-off']
+        : index % 5 === 0
+          ? []
+          : [
+              ...new Set([
+                categoryTag[category.name] || 'Daily',
+                ...(index % 3 === 0 ? ['Essential'] : [])
+              ])
+            ]
+    return tagIds(names).map(tagId => ({ transactionId: ids.get(row.clientId), tagId }))
+  })
+  for (let i = 0; i < links.length; i += chunkSize)
+    await db.transactionTag.createMany({ data: links.slice(i, i + chunkSize) })
 
-  const spent = transactions.filter(t => t.type === 'EXPENSE').reduce((s, t) => s + t.amount, 0)
-  const earned = transactions.filter(t => t.type === 'INCOME').reduce((s, t) => s + t.amount, 0)
-  console.log(`\n  balance  ${((earned - spent) / 100).toFixed(2)} ${CONFIG.currency}`)
-  console.log(`  income   ${(earned / 100).toFixed(2)}`)
-  console.log(`  expenses ${(spent / 100).toFixed(2)}`)
-  console.log(`\nLog in with  ${CONFIG.email}  /  ${CONFIG.password}`)
-
-  await prisma.$disconnect()
+  for (const rule of [salary, rent]) {
+    const history = transactions.filter(row => row.recurringId === rule.id)
+    if (history.length)
+      await db.recurringRule.update({
+        where: { id: rule.id },
+        data: { lastProcessedDate: history[history.length - 1].date }
+      })
+  }
+  const weekly = (category, amount, description, date) => ({
+    userId: user.id,
+    categoryId: byName[category].id,
+    type: 'EXPENSE',
+    amount: toCents(amount),
+    description,
+    frequency: 'WEEK',
+    interval: 1,
+    startDate: date,
+    nextDate: date
+  })
+  const lunch = await db.recurringRule.create({
+    data: weekly('Food', 35, 'Weekly lunch', addDays(day, 2))
+  })
+  await db.occurrenceOverride.create({
+    data: {
+      ruleId: lunch.id,
+      date: lunch.nextDate,
+      kind: 'EDIT',
+      amount: toCents(60),
+      comment: 'Next lunch with friends',
+      categoryId: byName.Entertainment.id,
+      tags: { create: tagIds(['Leisure', 'One-off']).map(tagId => ({ tagId })) }
+    }
+  })
+  const commute = await db.recurringRule.create({
+    data: weekly('Transport', 25, 'Weekly commute', addDays(day, 3))
+  })
+  await db.occurrenceOverride.create({
+    data: {
+      ruleId: commute.id,
+      date: commute.nextDate,
+      kind: 'SKIP',
+      processedAt: new Date()
+    }
+  })
+  // A future skip belongs to this exact date; it is not processed history.
+  await db.recurringRule.update({
+    where: { id: commute.id },
+    data: {
+      nextDate: addDays(commute.nextDate, 7)
+    }
+  })
+  await db.budget.createMany({ data: buildBudgets(byName).map(b => ({ ...b, userId: user.id })) })
+  return {
+    transactions: transactions.length,
+    tags: tags.length,
+    links: links.length,
+    earned: transactions
+      .filter(row => row.type === 'INCOME')
+      .reduce((sum, row) => sum + row.amount, 0),
+    spent: transactions
+      .filter(row => row.type === 'EXPENSE')
+      .reduce((sum, row) => sum + row.amount, 0)
+  }
 }
 
-main().catch(err => {
-  console.error(`\nSeed failed: ${err.message}`)
-  process.exit(1)
-})
+async function main() {
+  if (!Number.isInteger(CONFIG.months) || CONFIG.months < 1 || CONFIG.months > 120)
+    throw new Error('SEED_MONTHS must be an integer between 1 and 120.')
+  const day = calendarToday(CONFIG.timeZone)
+  const startDate = new Date(
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth() - CONFIG.months + 1, 1)
+  )
+  const client = createClient(databaseConfig())
+  const prisma = new PrismaClient({ adapter: new PrismaLibSQL(client) })
+  try {
+    console.log(`Seeding ${CONFIG.email} with ${CONFIG.months} months of data (${CONFIG.timeZone})`)
+    console.log(
+      `  window: ${startDate.toISOString().slice(0, 10)} -> ${day.toISOString().slice(0, 10)}`
+    )
+    const password = bcrypt.hashSync(CONFIG.password, 10)
+    const result = await prisma.$transaction(
+      async db => {
+        const existing = await db.user.findUnique({ where: { email: CONFIG.email } })
+        if (existing && !RESET) return null
+        const removed = existing ? await wipeUser(db, existing.id) : null
+        const user = await db.user.create({
+          data: {
+            name: CONFIG.name,
+            email: CONFIG.email,
+            password,
+            currency: CONFIG.currency
+          }
+        })
+        return { removed, ...(await seedAccount(db, user, startDate, day)) }
+      },
+      { timeout: 60000, maxWait: 10000 }
+    )
+    if (!result) {
+      console.log(`  skipped: ${CONFIG.email} already exists (use --reset to wipe and regenerate)`)
+      return
+    }
+    if (result.removed) console.log('  removed previous account data:', result.removed)
+    console.log(
+      `  ${result.transactions} transactions, ${result.tags} tags, ${result.links} tag links`
+    )
+    console.log('  4 recurring rules: salary, rent, next-only lunch edit and skipped commute')
+    console.log('  5 budgets (3 monthly, 2 weekly)')
+    console.log(`  balance ${((result.earned - result.spent) / 100).toFixed(2)} ${CONFIG.currency}`)
+    console.log(`Log in as ${CONFIG.email} with the configured SEED_PASSWORD.`)
+  } finally {
+    await prisma.$disconnect()
+    client.close()
+  }
+}
+
+module.exports = { calendarToday, nextAfterToday }
+if (require.main === module)
+  main().catch(error => {
+    console.error(`Seed failed: ${safeError(error)}`)
+    process.exitCode = 1
+  })

@@ -51,7 +51,7 @@ inside the URL, never in the code or the schema.
 | `npm run db:push` | Prisma CLI for disposable local experiments; bypasses migration history |
 | `npm run db:apply` | Applies checksummed SQL migrations to local SQLite or Turso |
 | `npm run db:check` | Checks migrations against `schema.prisma` offline; never connects to the configured database |
-| `npm run db:seed` | Fills a test account with six months of realistic data |
+| `npm run db:seed` | Fills a test account with 24 months of realistic data and new-feature examples |
 | `npm run db:studio` | Prisma Studio |
 | `npm run db:backup` | Verified SQLite snapshot of the configured local database or Turso, in `prisma/backups/` |
 | `npm run db:verify-backup -- path.db` | Restores a backup to a temporary local copy and verifies it |
@@ -175,7 +175,7 @@ the migration ledger and can leave a database the runner will refuse to adopt.
 
 ## Test data
 
-`npm run db:seed` creates an account with six months of history, so the
+`npm run db:seed` creates an account with 24 months of history, so the
 dashboard, analytics, category totals and budget bars all have something to show.
 
 ```
@@ -185,7 +185,12 @@ seed@porkex.test / porkex123
 It generates a monthly salary, the odd freelance invoice, rent and utilities,
 and variable Food / Transport / Entertainment / Shopping spending, plus three
 monthly and two weekly budgets (which land both under and over their limit) and
-the two recurring rules behind the salary and the rent.
+four recurring rules: salary, rent, a weekly lunch with a next-only edit
+(amount, category, comment and tags), and a weekly commute with its next date
+already skipped. Eight ordered tags and movements with 0–5 tags, with and
+without comments, exercise the movement forms and lists. History covers the
+previous calendar year as well as the current year; recent daily receipts
+ensure both weekly comparison periods have data.
 The random generator is seeded, so the same command always produces the same
 data — "the analytics look wrong" is a real signal instead of noise.
 
@@ -194,16 +199,33 @@ data — "the analytics look wrong" is a real signal instead of noise.
 | `SEED_EMAIL` | `seed@porkex.test` |
 | `SEED_PASSWORD` | `porkex123` |
 | `SEED_NAME` | `Porkex Tester` |
-| `SEED_MONTHS` | `6` |
+| `SEED_MONTHS` | `24` (integer, 1–120) |
 | `SEED_CURRENCY` | `USD` |
+| `SEED_TIME_ZONE` | `America/Lima` |
 
-It never touches an account that already has data: it skips it and exits 0, so
-the same command can run in the Render build on every deploy without failing.
-Regenerating requires the explicit flag:
+It skips any existing account and exits 0 unless `--reset` is explicit, including
+an account that only has tags and no movements. Regenerating requires the flag:
 
 ```
 npm run db:seed -- --reset   # wipes and regenerates that account
 ```
+
+Reset and regeneration run in one transaction, including tag references,
+movement/tag links and recurring exceptions. A failure restores the previous
+account and its data; other accounts are untouched. Calendar days use
+`SEED_TIME_ZONE` and are stored at UTC midnight regardless of the server zone.
+The normal recurring history has its processed cursor initialized, preventing
+duplicate materialization on first login.
+
+For a disposable test account that should regenerate on every deployment:
+
+```bash
+npm ci && npm run build && npm run db:apply && npm run db:seed -- --reset
+```
+
+Keep `npm start` as the start command. The reset affects the account selected
+by `SEED_EMAIL`, so keep that value consistent between deploys. If you configured
+`SEED_MONTHS=6` previously, remove it or set it to `24` for year comparisons.
 
 It writes to whatever `DATABASE_URL` points at, so to fill the hosted database
 run it from your machine with Turso's values in the environment:
