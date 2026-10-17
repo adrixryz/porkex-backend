@@ -7,6 +7,8 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createClient } from '@libsql/client'
 import migrationsApi from '../scripts/lib/migrations.js'
+import { PrismaClient } from '@prisma/client'
+import { PrismaLibSQL } from '@prisma/adapter-libsql'
 
 const { loadMigrations, describe, sameSchema, buildReference, checkPrismaSchema, runMigrations } =
   migrationsApi
@@ -57,6 +59,7 @@ async function seed(client) {
     INSERT INTO "Transaction" (id,amount,type,description,date,categoryId,userId,recurringId)
       VALUES(1,100,'EXPENSE','old',1767225600000,1,1,1),
             (2,100,'EXPENSE','new',1769904000000,1,1,1),
+            (3,100,'EXPENSE','legacy ISO','2025-01-01T00:00:00+00:00',1,1,1),
             (99,100,'EXPENSE','deleted',1769904000000,1,1,NULL);
     DELETE FROM "Transaction" WHERE id=99;
   `)
@@ -77,11 +80,11 @@ try {
   const watermarks = (
     await existing.execute('SELECT id,lastProcessedDate FROM RecurringRule ORDER BY id')
   ).rows
-  assert.equal(watermarks[0].lastProcessedDate, 1769904000000n)
+  assert.equal(watermarks[0].lastProcessedDate, '2026-02-01T00:00:00+00:00')
   assert.equal(watermarks[1].lastProcessedDate, null)
   assert.equal(
     (await existing.execute('SELECT COUNT(*) AS count FROM "Transaction"')).rows[0].count,
-    2n
+    3n
   )
   assert.equal(
     (await existing.execute("SELECT seq FROM sqlite_sequence WHERE name='Transaction'")).rows[0]
@@ -127,7 +130,7 @@ try {
   assert.equal(
     (await legacy.execute('SELECT lastProcessedDate FROM RecurringRule WHERE id=1')).rows[0]
       .lastProcessedDate,
-    1769904000000n
+    '2026-02-01T00:00:00+00:00'
   )
 
   for (const edit of [
@@ -159,6 +162,21 @@ try {
     )
   }
 
+  const reader = new PrismaClient({ adapter: new PrismaLibSQL(createClient({ url: `file:${join(temporary, 'test-2.db').replace(/\\/g, '/')}` })) })
+  try {
+    const rows = await reader.transaction.findMany({ where: { date: { gte: new Date('2026-01-01T00:00:00Z'), lte: new Date('2026-02-01T00:00:00Z') } } })
+    assert.equal(rows.length, 2)
+    assert.equal(rows.find(row => row.id === 2).date.toISOString(), '2026-02-01T00:00:00.000Z')
+  } finally { await reader.$disconnect() }
+
+  const invalidDates = await memory(baseline)
+  await seed(invalidDates)
+  await invalidDates.execute(`UPDATE "Transaction" SET date='2026-02-31T00:00:00Z' WHERE id=1`)
+  await assert.rejects(runMigrations(invalidDates, migrations), /CHECK constraint/)
+  assert.equal((await invalidDates.execute('SELECT date FROM "Transaction" WHERE id=1')).rows[0].date, '2026-02-31T00:00:00Z')
+  assert.equal((await invalidDates.execute(`SELECT name FROM sqlite_master WHERE name='_PorkexMigration'`)).rows.length, 0)
+  assert.equal((await legacy.execute(`SELECT COUNT(*) AS n FROM "Transaction" WHERE date >= '2026-01-01T00:00:00+00:00' AND date <= '2026-02-01T00:00:00+00:00'`)).rows[0].n, 2n)
+
   const postMigrationDrift = await memory()
   await runMigrations(postMigrationDrift, migrations)
   await postMigrationDrift.execute('DROP INDEX User_email_key')
@@ -183,7 +201,7 @@ try {
   await seed(rollback)
   const sql = 'CREATE TABLE Probe(id INTEGER); UPDATE "User" SET currency=NULL;'
   const failing = {
-    id: '003_failure',
+    id: '004_failure',
     sql,
     checksum: createHash('sha256').update(sql).digest('hex')
   }
