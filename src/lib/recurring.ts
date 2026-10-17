@@ -75,11 +75,14 @@ export function runDueRules(
 
 async function materializeUser(userId: number, today: Date): Promise<RecurringResult> {
   const rules = await prisma.recurringRule.findMany({
-    where: { userId, active: true, nextDate: { lte: today } },
-    select: { id: true }
+    // Native Prisma used integer DATETIMEs; the libSQL adapter writes ISO
+    // text. SQLite sorts those storage classes separately, so compare the
+    // decoded dates instead. A personal account has few active schedules.
+    where: { userId, active: true },
+    select: { id: true, nextDate: true }
   })
   let created = 0
-  for (const { id } of rules) {
+  for (const { id } of rules.filter(rule => rule.nextDate <= today)) {
     created += await prisma.$transaction(async tx => {
       // Re-read under the transaction so cursor and rows advance together.
       const rule = await tx.recurringRule.findFirst({ where: { id, userId, active: true } })
@@ -126,8 +129,9 @@ async function materializeUser(userId: number, today: Date): Promise<RecurringRe
       return missing.length
     })
   }
-  const pending = await prisma.recurringRule.count({
-    where: { userId, active: true, nextDate: { lte: today } }
+  const remaining = await prisma.recurringRule.findMany({
+    where: { userId, active: true },
+    select: { nextDate: true }
   })
-  return { created, state: pending > 0 ? 'pending' : 'ready' }
+  return { created, state: remaining.some(rule => rule.nextDate <= today) ? 'pending' : 'ready' }
 }

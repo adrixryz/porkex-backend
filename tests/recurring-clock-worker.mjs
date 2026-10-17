@@ -46,8 +46,18 @@ for (const [zone, day, instants] of [
     }
   })
   const created = []
-  for (const instant of instants)
-    created.push((await runDueRules(user.id, new Date(instant), zone)).created)
+  // Native Prisma historically stored DATETIME as milliseconds; the libSQL
+  // adapter writes ISO text. Both representations must compare as dates.
+  await prisma.$executeRawUnsafe(
+    'UPDATE "RecurringRule" SET "nextDate"=? WHERE id=?',
+    new Date(`${day}T00:00:00Z`).getTime(),
+    rule.id
+  )
+  for (const instant of instants) {
+    const result = await runDueRules(user.id, new Date(instant), zone)
+    assert.equal(result.state, 'ready', 'a future native DATETIME is not pending')
+    created.push(result.created)
+  }
   assert.deepEqual(created, [0, 1, 0], `${zone} ${day}: local midnight only`)
   const rows = await prisma.transaction.findMany({ where: { recurringId: rule.id } })
   assert.equal(rows.length, 1)
