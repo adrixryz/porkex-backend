@@ -13,6 +13,7 @@ import { occurrencesRouter } from './occurrences'
 import { commentInput, resolveTagIds, tagInclude } from '../lib/tags'
 import {
   firstOccurrenceOnOrAfter,
+  nextOccurrence,
   parseFrequency,
   runDueRules,
   type RecurringFrequency
@@ -1498,6 +1499,14 @@ router.put('/recurring/:id', async (req: AuthRequest, res) => {
       const floor = processedFloor > res.locals.today ? processedFloor : res.locals.today
       nextDate = initialNextDate(v.startDate!, v.frequency!, v.interval!, floor)
     }
+    // A future skip excludes its exact date, not every earlier calendar day.
+    const skipped = await prisma.occurrenceOverride.findMany({
+      where: { ruleId, kind: 'SKIP' },
+      select: { date: true }
+    })
+    const skippedDays = new Set(skipped.map(item => dayKey(item.date)))
+    while (skippedDays.has(dayKey(nextDate)))
+      nextDate = nextOccurrence(nextDate, v.frequency!, v.interval!, v.startDate!.getUTCDate())
     if (endDate && nextDate > endDate) active = false
 
     const updated = await prisma.$transaction(async db => {

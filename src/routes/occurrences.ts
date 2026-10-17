@@ -69,7 +69,7 @@ occurrencesRouter.put('/:ruleId/occurrences/:day', async (req: AuthRequest, res,
           where: { id: ruleId },
           data: {
             nextDate: following,
-            lastProcessedDate: date,
+            ...(date <= res.locals.today ? { lastProcessedDate: date } : {}),
             active: !(rule.endDate && following > rule.endDate)
           }
         })

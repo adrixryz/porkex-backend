@@ -76,6 +76,46 @@ await withServer('occurrences', async ctx => {
   await request('DELETE', `/transactions/${row.id}`)
   await request('PUT', editPath, edit)
   assert.equal((await request('GET', '/transactions')).items.length, 0)
+  const rescheduled = await request(
+    'POST',
+    '/recurring',
+    {
+      type: 'EXPENSE',
+      amount: 10,
+      categoryId: expense.id,
+      frequency: 'DAY',
+      interval: 1,
+      startDate: day(5)
+    },
+    201
+  )
+  await request('PUT', `/recurring/${rescheduled.id}/occurrences/${day(5)}`, { kind: 'SKIP' })
+  const resumed = await request('PUT', '/recurring/' + rescheduled.id, {
+    type: 'EXPENSE',
+    amount: 10,
+    categoryId: expense.id,
+    frequency: 'DAY',
+    interval: 1,
+    startDate: day()
+  })
+  assert.equal(
+    resumed.nextDate.slice(0, 10),
+    day(1),
+    'A future skip must not suppress unrelated earlier dates after a calendar edit'
+  )
+  const skippedAgain = await request('PUT', '/recurring/' + rescheduled.id, {
+    type: 'EXPENSE',
+    amount: 10,
+    categoryId: expense.id,
+    frequency: 'DAY',
+    interval: 1,
+    startDate: day(5)
+  })
+  assert.equal(
+    skippedAgain.nextDate.slice(0, 10),
+    day(6),
+    'The explicitly skipped date remains skipped after calendar edits'
+  )
   console.log(
     'PASS occurrences: exact date, idempotent skip/edit, one-only materialization, tags and deleted history'
   )

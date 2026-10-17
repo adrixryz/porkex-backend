@@ -303,3 +303,5 @@ Migration 005 adds exceptions bound to a recurring rule and exact scheduled day.
 GET /api/analytics/comparison accepts mode=year|week, anchor=YYYY-MM-DD, today and weekStart. Selected periods compare with the immediately preceding period; current periods use equal elapsed calendar coverage (Feb 29 clamps to Feb 28 in a non-leap comparison year). Results include ranges, partial status, totals, deltas and monthly/daily buckets; zero-base growth is null rather than Infinity. Queries are scoped to the account and two bounded ranges.
 
 The financial-workflow regression builds the complete migrated schema in a temporary database, combines tags/aliases, a commentless movement, a next-only edit and comparison totals, then creates and restores a verified SQLite backup and reads the recovered relations through Prisma. No real Turso database is used.
+
+A future skipped occurrence is retained in its own date-specific ledger. It does not move the processed-history watermark into the future: re-scheduling to an earlier day still generates legitimate new dates, while the explicitly skipped date remains excluded across schedule edits and resume.
