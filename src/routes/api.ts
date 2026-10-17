@@ -8,6 +8,7 @@ import { fromCents, toCents, toCentsNonNegative } from '../lib/money'
 import { isUniqueViolation } from '../lib/errors'
 import { passwordError } from '../lib/passwords'
 import { tagsRouter } from './tags'
+import { comparisonsRouter } from './comparisons'
 import { occurrencesRouter } from './occurrences'
 import { commentInput, resolveTagIds, tagInclude } from '../lib/tags'
 import {
@@ -56,6 +57,7 @@ router.use(async (req: AuthRequest, res, next) => {
 })
 
 router.use('/tags', tagsRouter)
+router.use('/analytics', comparisonsRouter)
 router.use('/recurring', occurrencesRouter)
 
 type TxType = 'INCOME' | 'EXPENSE'
@@ -913,11 +915,9 @@ router.put('/categories/:id', async (req: AuthRequest, res) => {
         where: { categoryId: catId, processedAt: null }
       })
       if (incompatibleOverrides)
-        return res
-          .status(409)
-          .json({
-            error: 'Category is used by a next-only edit. Edit or skip that occurrence first.'
-          })
+        return res.status(409).json({
+          error: 'Category is used by a next-only edit. Edit or skip that occurrence first.'
+        })
       const incompatibleRules = await prisma.recurringRule.count({
         where: { categoryId: catId, userId, type: { not: v.type! } }
       })
@@ -954,11 +954,9 @@ router.delete('/categories/:id', async (req: AuthRequest, res) => {
     if (!existing) return res.status(404).json({ error: 'Category not found.' })
 
     if (await prisma.occurrenceOverride.count({ where: { categoryId: catId, processedAt: null } }))
-      return res
-        .status(409)
-        .json({
-          error: 'Category is used by a next-only edit. Edit or skip that occurrence first.'
-        })
+      return res.status(409).json({
+        error: 'Category is used by a next-only edit. Edit or skip that occurrence first.'
+      })
     const txCount = await prisma.transaction.count({ where: { categoryId: catId, userId } })
     if (txCount === 0) {
       // Recurring rules go with their category. Deleted explicitly — not left
