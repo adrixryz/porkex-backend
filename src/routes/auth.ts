@@ -10,6 +10,12 @@ const router = Router()
 const MAX_NAME_LENGTH = 80
 const MAX_EMAIL_LENGTH = 254
 
+const registrationEnabled = () => process.env.ALLOW_REGISTRATION === 'true'
+
+router.get('/config', (_req, res) => {
+  res.json({ registrationEnabled: registrationEnabled() })
+})
+
 // Default categories seeded per user
 const DEFAULT_CATEGORIES = [
   { name: 'Salary', type: 'INCOME', color: '#34A853' },
@@ -40,6 +46,9 @@ async function seedCategoriesForUser(userId: number) {
 
 // ── REGISTER ───────────────────────────────────────────
 router.post('/register', async (req, res) => {
+  if (!registrationEnabled()) {
+    return res.status(403).json({ error: 'Registration is disabled.' })
+  }
   const { name, email, password } = req.body
 
   const cleanName = typeof name === 'string' ? name.trim() : ''
