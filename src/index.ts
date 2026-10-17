@@ -6,6 +6,7 @@ import apiRoutes from './routes/api'
 import authRoutes from './routes/auth'
 import { assertJwtSecretIsConfigured } from './middleware/auth'
 import { apiLimiter, authLimiter } from './middleware/rateLimit'
+import { prisma } from './lib/prisma'
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -50,6 +51,19 @@ if (CORS_ORIGINS.length > 0) {
 }
 
 app.use(express.json())
+
+// Liveness probe for the hosting platform and uptime monitors. "The port
+// answers" alone would miss the failure that actually happens — the database
+// going away — so this pings it. Deliberately mounted before the rate
+// limiters: probes are periodic and must never consume the API budget.
+app.get('/health', async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`
+    res.json({ status: 'ok', db: 'up' })
+  } catch {
+    res.status(503).json({ status: 'degraded', db: 'down' })
+  }
+})
 
 // Public routes (no auth required). The stricter limiter sits on /auth only:
 // a brute-force attack targets those two endpoints, and every other request

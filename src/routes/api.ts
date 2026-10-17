@@ -1,10 +1,12 @@
 import { Router } from 'express'
+import bcrypt from 'bcryptjs'
 import type { Prisma } from '@prisma/client'
 import { AuthRequest, authMiddleware } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { isValidCurrency } from '../lib/currencies'
 import { fromCents, toCents, toCentsNonNegative } from '../lib/money'
 import { isUniqueViolation } from '../lib/errors'
+import { passwordError } from '../lib/passwords'
 import {
   addDays,
   dayKey,
@@ -1149,6 +1151,46 @@ router.put('/profile', async (req: AuthRequest, res) => {
   } catch (error) {
     console.error('Profile update failed.', error)
     res.status(500).json({ error: 'Profile update failed.' })
+  }
+})
+
+// ── PASSWORD ───────────────────────────────────────────
+router.put('/password', async (req: AuthRequest, res) => {
+  const userId = req.userId!
+  const currentPassword = req.body?.currentPassword
+  const newPassword = req.body?.newPassword
+
+  if (
+    typeof currentPassword !== 'string' ||
+    !currentPassword ||
+    typeof newPassword !== 'string' ||
+    !newPassword
+  ) {
+    return res.status(400).json({ error: 'Current and new password are required.' })
+  }
+
+  // Same policy as registration (see lib/passwords.ts).
+  const pwError = passwordError(newPassword, 'New password')
+  if (pwError) return res.status(400).json({ error: pwError })
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id: userId } })
+    if (!user) return res.status(404).json({ error: 'User not found.' })
+
+    const valid = await bcrypt.compare(currentPassword, user.password)
+    // 400, never 401: the frontend treats a 401 as an expired session and
+    // would log the user out over a simple typo.
+    if (!valid) return res.status(400).json({ error: 'Current password is incorrect.' })
+
+    const hashed = await bcrypt.hash(newPassword, 10)
+    await prisma.user.update({ where: { id: userId }, data: { password: hashed } })
+
+    // Existing tokens stay valid on purpose: they carry only the user id, and
+    // the session model is "never expires" (see README).
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Password change failed.', error)
+    res.status(500).json({ error: 'Password change failed.' })
   }
 })
 

@@ -3,12 +3,10 @@ import bcrypt from 'bcryptjs'
 import { generateToken } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { isUniqueViolation } from '../lib/errors'
+import { passwordError } from '../lib/passwords'
 
 const router = Router()
 
-// bcrypt hashes at most 72 bytes and silently ignores the rest; accepting a
-// longer password would mean two different passwords open the same account.
-const MAX_PASSWORD_BYTES = 72
 const MAX_NAME_LENGTH = 80
 const MAX_EMAIL_LENGTH = 254
 
@@ -58,13 +56,8 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ error: 'Invalid email format.' })
   }
 
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters.' })
-  }
-
-  if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
-    return res.status(400).json({ error: `Password must be at most ${MAX_PASSWORD_BYTES} bytes.` })
-  }
+  const pwError = passwordError(password)
+  if (pwError) return res.status(400).json({ error: pwError })
 
   try {
     const existing = await prisma.user.findUnique({ where: { email: cleanEmail } })

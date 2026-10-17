@@ -55,13 +55,14 @@ inside the URL, never in the code or the schema.
 
 ```
 src/
-  index.ts          App wiring, JSON 404 and error handlers
+  index.ts          App wiring, /health probe, JSON 404 and error handlers
   lib/
     prisma.ts       Client singleton (survives nodemon reloads)
     money.ts        Cents <-> amounts conversion
     dates.ts        Calendar-day helpers (all math in UTC)
     errors.ts       Prisma error helpers (unique violation)
     currencies.ts   Supported currency codes
+    passwords.ts    Password policy (shared by register and change)
   middleware/
     auth.ts         Bearer token verification
     rateLimit.ts    Auth and API rate limiters
@@ -82,6 +83,7 @@ Public:
 | --- | --- | --- |
 | POST | `/auth/register` | Creates the user, seeds 8 default categories, returns a JWT |
 | POST | `/auth/login` | Returns a JWT and the user |
+| GET | `/health` | Pings the database: `200 { status: "ok", db: "up" }` or `503 { status: "degraded", db: "down" }` |
 
 Protected (Bearer token required):
 
@@ -96,6 +98,7 @@ Protected (Bearer token required):
 | GET | `/api/budgets` | `?period=WEEK\|MONTH` `&today=YYYY-MM-DD`; omit period for both |
 | POST/PUT/DELETE | `/api/budgets[/:id]` | Unique per category and period |
 | GET/PUT | `/api/profile` | Name and currency |
+| PUT | `/api/password` | Change the password; verifies the current one (400, never 401, on mismatch) |
 | POST | `/api/transactions` | Accepts an optional `clientId`; a replay returns `200` with the stored row instead of creating a second one |
 
 ## Testing
