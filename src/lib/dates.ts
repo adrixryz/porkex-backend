@@ -11,6 +11,36 @@
 // calendar day it falls on.
 
 const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
+const ISO_RE =
+  /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
+
+/** Only ISO instants with a real calendar date, never Date's permissive parser. */
+export function parseInstant(v: unknown): Date | null {
+  if (typeof v !== 'string' || !ISO_RE.test(v) || !isDayString(v.slice(0, 10))) return null
+  const parsed = new Date(v)
+  return Number.isFinite(parsed.getTime()) ? parsed : null
+}
+
+export function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: value }).format()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Local calendar day, represented internally as UTC midnight. */
+export function todayInZone(timeZone = 'America/Lima', now = new Date()): Date {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(now)
+  const value = (part: string) => Number(parts.find(p => p.type === part)!.value)
+  return new Date(Date.UTC(value('year'), value('month') - 1, value('day')))
+}
 
 export function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n)
@@ -37,9 +67,8 @@ export function parseDay(v: unknown): Date | null {
     const [y, mo, d] = v.split('-').map(Number)
     return new Date(Date.UTC(y, mo - 1, d))
   }
-  if (typeof v !== 'string' || !v.trim()) return null
-  const parsed = new Date(v)
-  if (isNaN(parsed.getTime())) return null
+  const parsed = parseInstant(v)
+  if (!parsed) return null
   return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()))
 }
 

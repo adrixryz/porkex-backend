@@ -42,7 +42,8 @@ if (CORS_ORIGINS.length > 0) {
       // The access token travels in the Authorization header, which makes
       // every call a preflighted request. Without this the preflight fails and
       // the browser never sends the real one.
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Porkex-Time-Zone'],
+      exposedHeaders: ['X-Porkex-Recurring-State'],
       maxAge: 86400
     })
   )

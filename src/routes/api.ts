@@ -20,7 +20,9 @@ import {
   maxAllowedDay,
   monthKey,
   parseDay,
-  utcToday
+  parseInstant,
+  isTimeZone,
+  todayInZone
 } from '../lib/dates'
 
 const router = Router()
@@ -30,15 +32,23 @@ router.use(authMiddleware)
 
 // Materialize due recurring rules before the request runs, so any response
 // already reflects today's movements — including the first request after the
-// free-tier server woke up. With nothing due this is one indexed SELECT.
-router.use(async (req: AuthRequest, _res, next) => {
+// free-tier server woke up. Empty schedules only perform indexed reads.
+async function catchUp(req: AuthRequest, res: import('express').Response) {
   try {
-    await runDueRules(req.userId!)
+    const result = await runDueRules(req.userId!, new Date(), res.locals.timeZone)
+    res.setHeader('X-Porkex-Recurring-State', result.state)
   } catch (error) {
-    // A rule that cannot be materialized must not take the whole API down;
-    // the next request tries again.
+    res.setHeader('X-Porkex-Recurring-State', 'failed')
     console.error('Recurring catch-up failed.', error)
   }
+}
+
+router.use(async (req: AuthRequest, res, next) => {
+  const timeZone = req.get('X-Porkex-Time-Zone') ?? 'America/Lima'
+  if (!isTimeZone(timeZone)) return res.status(400).json({ error: 'Invalid time zone.' })
+  res.locals.timeZone = timeZone
+  res.locals.today = todayInZone(timeZone)
+  await catchUp(req, res)
   next()
 })
 
@@ -121,11 +131,11 @@ function parseIntParam(v: unknown, fallback: number): number {
 /**
  * The client's "today" as a UTC-midnight calendar day, for windows that depend
  * on "now" (budget periods, analytics buckets). The frontend sends its local
- * date as `today=YYYY-MM-DD`; without it the UTC day is used as a fallback.
+ * date as `today=YYYY-MM-DD`; without it the validated request zone is used.
  * Returns null when the parameter is present but malformed.
  */
-function resolveToday(query: Record<string, unknown>): Date | null {
-  if (query.today === undefined || query.today === '') return utcToday()
+function resolveToday(query: Record<string, unknown>, fallback: Date): Date | null {
+  if (query.today === undefined || query.today === '') return fallback
   if (!isDayString(query.today)) return null
   return parseDay(query.today)
 }
@@ -139,9 +149,7 @@ function parseRangeBound(v: unknown, endOfDay: boolean): Date | null {
     const day = parseDay(v)!
     return endOfDay ? new Date(day.getTime() + 86400000 - 1) : day
   }
-  if (typeof v !== 'string' || !v.trim()) return null
-  const parsed = new Date(v)
-  return isNaN(parsed.getTime()) ? null : parsed
+  return parseInstant(v)
 }
 
 // Optional date range shared by /transactions and /categories.
@@ -248,7 +256,7 @@ router.get('/analytics', async (req: AuthRequest, res) => {
 
   // Anchor every window on the client's own calendar day, so the buckets do
   // not flip hours before midnight for a user west of UTC (or after it, east).
-  const today = resolveToday(req.query as Record<string, unknown>)
+  const today = resolveToday(req.query as Record<string, unknown>, res.locals.today)
   if (!today) return res.status(400).json({ error: 'Invalid "today" date.' })
 
   try {
@@ -664,7 +672,7 @@ router.post('/transactions', async (req: AuthRequest, res) => {
         userId,
         // A missing date defaults to today's calendar day (UTC midnight), not
         // to the current instant: `date` is a day, `createdAt` is the clock.
-        date: v.date ?? utcToday(),
+        date: v.date ?? res.locals.today,
         ...(clientId ? { clientId } : {})
       },
       include: { category: true }
@@ -872,6 +880,14 @@ router.put('/categories/:id', async (req: AuthRequest, res) => {
           .status(409)
           .json({ error: 'Cannot change type: category has existing transactions.' })
       }
+      const incompatibleRules = await prisma.recurringRule.count({
+        where: { categoryId: catId, userId, type: { not: v.type! } }
+      })
+      if (incompatibleRules > 0) {
+        return res
+          .status(409)
+          .json({ error: 'Cannot change type: category has incompatible recurring rules.' })
+      }
     }
 
     const cat = await prisma.category.update({
@@ -1005,7 +1021,7 @@ router.get('/budgets', async (req: AuthRequest, res) => {
     return res.status(400).json({ error: 'Period must be WEEK or MONTH.' })
   }
 
-  const today = resolveToday(req.query as Record<string, unknown>)
+  const today = resolveToday(req.query as Record<string, unknown>, res.locals.today)
   if (!today) return res.status(400).json({ error: 'Invalid "today" date.' })
 
   const weekStart = resolveWeekStart(req.query as Record<string, unknown>)
@@ -1195,8 +1211,10 @@ function parseInterval(v: unknown): number | null {
   return n
 }
 
-function serializeRule<T extends { amount: number }>(rule: T) {
-  return { ...rule, amount: fromCents(rule.amount) }
+function serializeRule<T extends { amount: number; lastProcessedDate?: Date | null }>(rule: T) {
+  const { lastProcessedDate: _cursor, ...visible } = rule
+  void _cursor
+  return { ...visible, amount: fromCents(rule.amount) }
 }
 
 async function validateRecurringInput(
@@ -1279,8 +1297,12 @@ async function validateRecurringInput(
  * backfills: a rule created (or resumed, or re-scheduled) today starts at the
  * next occurrence — today itself when it falls on the schedule.
  */
-function initialNextDate(startDate: Date, frequency: RecurringFrequency, interval: number): Date {
-  const today = utcToday()
+function initialNextDate(
+  startDate: Date,
+  frequency: RecurringFrequency,
+  interval: number,
+  today: Date
+): Date {
   const anchor = startDate > today ? startDate : today
   return firstOccurrenceOnOrAfter(startDate, frequency, interval, anchor)
 }
@@ -1332,7 +1354,7 @@ router.post('/recurring', async (req: AuthRequest, res) => {
         interval: v.interval!,
         startDate: v.startDate!,
         endDate: v.endDate ?? null,
-        nextDate: initialNextDate(v.startDate!, v.frequency!, v.interval!),
+        nextDate: initialNextDate(v.startDate!, v.frequency!, v.interval!, res.locals.today),
         ...(clientId ? { clientId } : {})
       },
       include: { category: true }
@@ -1340,7 +1362,7 @@ router.post('/recurring', async (req: AuthRequest, res) => {
 
     // Materialize right away when the first occurrence falls on today, so the
     // response already reflects it instead of waiting for the next request.
-    await runDueRules(userId)
+    await catchUp(req, res)
 
     const fresh = await prisma.recurringRule.findUnique({
       where: { id: created.id },
@@ -1379,7 +1401,19 @@ router.put('/recurring/:id', async (req: AuthRequest, res) => {
     const endDate = req.body.endDate === undefined ? existing.endDate : (v.endDate ?? null)
 
     let active = typeof req.body.active === 'boolean' ? req.body.active : existing.active
-    const nextDate = initialNextDate(v.startDate!, v.frequency!, v.interval!)
+    const scheduleChanged =
+      existing.startDate.getTime() !== v.startDate!.getTime() ||
+      existing.frequency !== v.frequency ||
+      existing.interval !== v.interval
+    const resumed = !existing.active && active
+    let nextDate = existing.nextDate
+    if (scheduleChanged || resumed) {
+      const processedFloor = existing.lastProcessedDate
+        ? addDays(existing.lastProcessedDate, 1)
+        : res.locals.today
+      const floor = processedFloor > res.locals.today ? processedFloor : res.locals.today
+      nextDate = initialNextDate(v.startDate!, v.frequency!, v.interval!, floor)
+    }
     if (endDate && nextDate > endDate) active = false
 
     const updated = await prisma.recurringRule.update({
@@ -1401,7 +1435,7 @@ router.put('/recurring/:id', async (req: AuthRequest, res) => {
 
     // A resume may make today's occurrence due again; settle it before
     // reading back so the response carries the advanced next date.
-    await runDueRules(userId)
+    await catchUp(req, res)
 
     const fresh = await prisma.recurringRule.findUnique({
       where: { id: ruleId },

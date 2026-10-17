@@ -53,14 +53,14 @@ await withServer('money', async ({ call, check, state }) => {
   // 0.30 + 1.15 + 2.35 + 3.45 + 4.55 + 5.65 = 17.45
   check('la suma de 7 decimales es exacta', after.total === 17.45, `total=${after.total}`)
 
-  // ── redondeo de lo que llega por la API ──
+  // ── no se redondean silenciosamente importes con precisión excesiva ──
   r = await call('POST', '/api/transactions', {
     amount: 10.999,
     type: 'EXPENSE',
     description: 'redondeo',
     categoryId: food.id
   })
-  check('redondea a 2 decimales', r.data?.amount === 11, `recibido ${r.data?.amount}`)
+  check('rechaza más de 2 decimales', r.status === 400, r.data?.error)
 
   r = await call('POST', '/api/transactions', {
     amount: 0.001,
@@ -68,7 +68,7 @@ await withServer('money', async ({ call, check, state }) => {
     description: 'insignificante',
     categoryId: food.id
   })
-  check('un importe que redondea a 0 se rechaza', r.status === 400, r.data?.error)
+  check('un importe inferior al céntimo se rechaza', r.status === 400, r.data?.error)
 
   // ── filtros por rango: comparan en centimos ──
   await call('POST', '/api/transactions', {

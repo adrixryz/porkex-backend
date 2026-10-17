@@ -1,21 +1,6 @@
-// Recurring rules and their materialization.
-//
-// A rule is a template: every occurrence that comes due becomes a real
-// Transaction, so the dashboard, the analytics, the budgets and the
-// transactions list all keep reading plain rows — and so does the app's own
-// offline cache.
-//
-// There is no scheduler. Materialization is a catch-up that runs before every
-// authenticated API call (see routes/api.ts): the next request after a due
-// date creates whatever came due, including everything that piled up while the
-// free-tier server was asleep. The unique index on (recurringId, date) makes
-// the pass idempotent, so running it twice — or from two requests at once —
-// cannot produce duplicates.
-
-import type { RecurringRule } from '@prisma/client'
+// Calendar schedules use UTC-midnight days; callers choose the user's local day.
 import { prisma } from './prisma'
-import { isUniqueViolation } from './errors'
-import { addDays, utcToday } from './dates'
+import { addDays, todayInZone, dayKey } from './dates'
 
 export const RECURRING_FREQUENCIES = ['DAY', 'WEEK', 'MONTH', 'YEAR'] as const
 export type RecurringFrequency = (typeof RECURRING_FREQUENCIES)[number]
@@ -25,23 +10,8 @@ export function parseFrequency(v: unknown): RecurringFrequency | null {
   return (RECURRING_FREQUENCIES as readonly string[]).includes(s) ? (s as RecurringFrequency) : null
 }
 
-// Safety valve: one rule materializes at most this many movements per pass, so
-// a pathological schedule cannot insert thousands of rows in one request.
-// Anything left over catches up on the next call (nextDate is persisted).
 const MAX_PER_PASS = 100
 
-// The forward walk used when a rule's start date is far in the past. Two
-// centuries of weekly occurrences fit — decades of daily ones; nothing real
-// gets close.
-const MAX_WALK = 10_000
-
-/**
- * The occurrence after `current`, keeping the rule's anchor day.
- *
- * Days and weeks are plain steps. Months recompute the day from the anchor, so
- * a rule on the 31st lands on Feb 28 (29 in leap years) and returns to the 31st
- * in March, instead of drifting earlier and earlier.
- */
 export function nextOccurrence(
   current: Date,
   frequency: RecurringFrequency,
@@ -50,7 +20,6 @@ export function nextOccurrence(
 ): Date {
   if (frequency === 'DAY') return addDays(current, interval)
   if (frequency === 'WEEK') return addDays(current, 7 * interval)
-
   const months = frequency === 'MONTH' ? interval : 12 * interval
   const total = current.getUTCMonth() + months
   const year = current.getUTCFullYear() + Math.floor(total / 12)
@@ -59,85 +28,106 @@ export function nextOccurrence(
   return new Date(Date.UTC(year, month, Math.min(anchorDay, lastDay)))
 }
 
-/**
- * The first occurrence that falls on or after `minDay`. Used when a rule is
- * created (or resumed, or re-scheduled): the schedule never backfills, it
- * starts at the first occurrence that has not already passed.
- */
 export function firstOccurrenceOnOrAfter(
   startDate: Date,
   frequency: RecurringFrequency,
   interval: number,
   minDay: Date
 ): Date {
-  const anchorDay = startDate.getUTCDate()
-  let occurrence = startDate
-  for (let i = 0; i < MAX_WALK && occurrence < minDay; i++) {
-    occurrence = nextOccurrence(occurrence, frequency, interval, anchorDay)
+  if (startDate >= minDay) return startDate
+  if (frequency === 'DAY' || frequency === 'WEEK') {
+    const step = interval * (frequency === 'WEEK' ? 7 : 1)
+    return addDays(
+      startDate,
+      Math.ceil((minDay.getTime() - startDate.getTime()) / (step * 86400000)) * step
+    )
   }
-  return occurrence
+  const months = frequency === 'MONTH' ? interval : 12 * interval
+  const elapsed =
+    (minDay.getUTCFullYear() - startDate.getUTCFullYear()) * 12 +
+    minDay.getUTCMonth() -
+    startDate.getUTCMonth()
+  const cycles = Math.floor(elapsed / months)
+  const anchorDay = startDate.getUTCDate()
+  const candidate = nextOccurrence(startDate, frequency, cycles * interval, anchorDay)
+  return candidate < minDay ? nextOccurrence(candidate, frequency, interval, anchorDay) : candidate
 }
 
-/**
- * Materializes every occurrence that came due, for one user, and returns how
- * many movements it created. Safe to call at any time: with nothing due it is
- * one indexed SELECT and no writes.
- */
-export async function runDueRules(userId: number, now = new Date()): Promise<number> {
-  const today = utcToday(now)
+export type RecurringResult = { created: number; state: 'ready' | 'pending' }
+const running = new Map<string, Promise<RecurringResult>>()
+
+/** Share concurrent catch-up work, never cache completion across later writes. */
+export function runDueRules(
+  userId: number,
+  now = new Date(),
+  timeZone = 'America/Lima'
+): Promise<RecurringResult> {
+  const today = todayInZone(timeZone, now)
+  const key = `${userId}:${dayKey(today)}`
+  const existing = running.get(key)
+  if (existing) return existing
+  const work = materializeUser(userId, today).finally(() => {
+    running.delete(key)
+  })
+  running.set(key, work)
+  return work
+}
+
+async function materializeUser(userId: number, today: Date): Promise<RecurringResult> {
   const rules = await prisma.recurringRule.findMany({
+    where: { userId, active: true, nextDate: { lte: today } },
+    select: { id: true }
+  })
+  let created = 0
+  for (const { id } of rules) {
+    created += await prisma.$transaction(async tx => {
+      // Re-read under the transaction so cursor and rows advance together.
+      const rule = await tx.recurringRule.findFirst({ where: { id, userId, active: true } })
+      if (!rule || rule.nextDate > today) return 0
+      const frequency = parseFrequency(rule.frequency)
+      if (!frequency) throw new Error(`Unknown recurring frequency: ${rule.frequency}`)
+      const anchorDay = rule.startDate.getUTCDate()
+      let nextDate = rule.nextDate
+      let lastProcessedDate = rule.lastProcessedDate
+      const dates: Date[] = []
+      for (let walked = 0; nextDate <= today && walked < MAX_PER_PASS; walked++) {
+        if (rule.endDate && nextDate > rule.endDate) break
+        if (!lastProcessedDate || nextDate > lastProcessedDate) {
+          dates.push(nextDate)
+          lastProcessedDate = nextDate
+        }
+        nextDate = nextOccurrence(nextDate, frequency, rule.interval, anchorDay)
+      }
+      // Older deployments may have generated history without the cursor.
+      const existing = dates.length
+        ? await tx.transaction.findMany({
+            where: { recurringId: id, date: { in: dates } },
+            select: { date: true }
+          })
+        : []
+      const stored = new Set(existing.map(row => dayKey(row.date)))
+      const missing = dates.filter(date => !stored.has(dayKey(date)))
+      if (missing.length)
+        await tx.transaction.createMany({
+          data: missing.map(date => ({
+            amount: rule.amount,
+            type: rule.type,
+            description: rule.description,
+            categoryId: rule.categoryId,
+            userId,
+            date,
+            recurringId: id
+          }))
+        })
+      await tx.recurringRule.update({
+        where: { id },
+        data: { nextDate, lastProcessedDate, active: !(rule.endDate && nextDate > rule.endDate) }
+      })
+      return missing.length
+    })
+  }
+  const pending = await prisma.recurringRule.count({
     where: { userId, active: true, nextDate: { lte: today } }
   })
-
-  let created = 0
-  for (const rule of rules) created += await materialize(rule, today)
-  return created
-}
-
-async function materialize(rule: RecurringRule, today: Date): Promise<number> {
-  const frequency = parseFrequency(rule.frequency)
-  if (!frequency) {
-    // Rows only get here through the validated API, so this is unreachable in
-    // practice; skipping the rule is safer than materializing nonsense.
-    console.error(`Recurring rule ${rule.id} has an unknown frequency: ${rule.frequency}`)
-    return 0
-  }
-
-  const anchorDay = rule.startDate.getUTCDate()
-  let nextDate = rule.nextDate
-  let active = true
-  let created = 0
-
-  while (nextDate <= today && created < MAX_PER_PASS) {
-    if (rule.endDate && nextDate > rule.endDate) {
-      active = false
-      break
-    }
-
-    try {
-      await prisma.transaction.create({
-        data: {
-          amount: rule.amount,
-          type: rule.type,
-          description: rule.description,
-          categoryId: rule.categoryId,
-          userId: rule.userId,
-          date: nextDate,
-          recurringId: rule.id
-        }
-      })
-      created += 1
-    } catch (error) {
-      // A duplicate means this date was already materialized — a lost
-      // response, a replay or a racing request. Moving on is the answer.
-      if (!isUniqueViolation(error)) throw error
-    }
-
-    nextDate = nextOccurrence(nextDate, frequency, rule.interval, anchorDay)
-  }
-
-  if (rule.endDate && nextDate > rule.endDate) active = false
-
-  await prisma.recurringRule.update({ where: { id: rule.id }, data: { nextDate, active } })
-  return created
+  return { created, state: pending > 0 ? 'pending' : 'ready' }
 }

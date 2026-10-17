@@ -18,16 +18,16 @@ const MAX_MAJOR_UNITS = 10_000_000
 
 /** Parses a positive user-supplied amount (major units) into whole cents. */
 export function toCents(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(v)
-  if (!Number.isFinite(n) || n <= 0 || n > MAX_MAJOR_UNITS) return null
-  const cents = Math.round(n * MINOR_UNITS)
-  // Rejects values that round down to nothing, e.g. 0.001.
-  return cents > 0 ? cents : null
+  const cents = toCentsNonNegative(v)
+  return cents !== null && cents > 0 ? cents : null
 }
 
 /** Same as toCents but for range filters, where a bound of 0 is meaningful. */
 export function toCentsNonNegative(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(v)
+  if (typeof v !== 'number' && typeof v !== 'string') return null
+  const text = typeof v === 'string' ? v.trim() : String(v)
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null
+  const n = Number(text)
   if (!Number.isFinite(n) || n < 0 || n > MAX_MAJOR_UNITS) return null
   return Math.round(n * MINOR_UNITS)
 }

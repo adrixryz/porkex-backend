@@ -32,11 +32,13 @@ if (command === 'age') {
   }
   await db.recurringRule.update({
     where: { id: Number(id) },
-    data: { nextDate: new Date(Date.UTC(y, m - 1, d)) }
+    data: { nextDate: new Date(Date.UTC(y, m - 1, d)), lastProcessedDate: null }
   })
 } else if (command === 'count-tx') {
   const count = await db.transaction.count({ where: { recurringId: Number(id) } })
   process.stdout.write(String(count))
+} else if (command === 'frequency') {
+  await db.recurringRule.update({ where: { id: Number(id) }, data: { frequency: extra } })
 } else {
   console.error(`Unknown command: ${command}`)
   process.exit(2)

@@ -88,6 +88,8 @@ model RecurringRule {
   endDate      DateTime?
   // The next occurrence still to materialize, at UTC midnight.
   nextDate     DateTime
+  // Durable cursor: deleting/editing generated history must never replay it.
+  lastProcessedDate DateTime?
   active       Boolean       @default(true)
   // See Transaction.clientId: same replay protection for queued creates.
   clientId     String?

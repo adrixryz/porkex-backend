@@ -215,6 +215,15 @@ await withServer('recurring', async ctx => {
     clampDays[1] === toISO(lastFeb) && clampDays[2] === `${clampYear}-03-31`,
     clampDays.slice(0, 3).join()
   )
+  r = await createRule({ description: 'Leap year', frequency: 'YEAR', startDate: '2024-02-29' })
+  const leapId = r.data.id
+  ageRule(leapId, new Date('2024-02-29T00:00:00Z'))
+  const leapDays = (await txOf(leapId)).map(t => toISO(new Date(t.date))).sort()
+  check(
+    'regla anual conserva ancla de febrero bisiesto y ajusta años no bisiestos',
+    leapDays.slice(0, 3).join() ===
+      ['2024-02-29', '2025-02-28', '2026-02-28'].filter(day => day <= todayISO).join()
+  )
 
   // ── endDate ─────────────────────────────────────────────────────────────
   r = await createRule({ description: 'Loan', endDate: todayISO })
@@ -284,6 +293,23 @@ await withServer('recurring', async ctx => {
   await txList()
   await txList()
   check('borrar una ocurrencia no la resucita', (await txOf(onceId)).length === 0)
+  const beforeEdit = (await call('GET', '/api/recurring')).data.find(rule => rule.id === onceId)
+  r = await call('PUT', `/api/recurring/${onceId}`, { ...ruleBody(beforeEdit), amount: 25 })
+  check(
+    'editar tras borrar conserva nextDate y no resucita la ocurrencia',
+    r.data.nextDate === beforeEdit.nextDate && (await txOf(onceId)).length === 0
+  )
+  await call('PUT', `/api/recurring/${onceId}`, { ...ruleBody(r.data), active: false })
+  r = await call('PUT', `/api/recurring/${onceId}`, { ...ruleBody(r.data), active: true })
+  check(
+    'reanudar tras borrar no resucita la ocurrencia procesada',
+    r.status === 200 && (await txOf(onceId)).length === 0
+  )
+  r = await call('PUT', `/api/recurring/${onceId}`, { ...ruleBody(r.data), frequency: 'DAY' })
+  check(
+    'cambiar calendario tras borrar respeta el cursor y avanza hacia el futuro',
+    r.status === 200 && new Date(r.data.nextDate) > today && (await txOf(onceId)).length === 0
+  )
 
   // ── Replay of a queued create (clientId) ────────────────────────────────
   r = await createRule({ description: 'Replay', clientId: 'replay-1' })
