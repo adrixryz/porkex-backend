@@ -279,6 +279,30 @@ await withServer('api', async ({ call, check, state }) => {
     `${r.data.trendData[0].balance} → ${r.data.trendData[r.data.trendData.length - 1].balance}`
   )
 
+  r = await call('GET', '/api/analytics?months=7&days=45')
+  check(
+    '2 analytics rango libre months=7 days=45',
+    r.data.monthlyData.length === 7 &&
+      r.data.trendData.length === 45 &&
+      r.data.range.months === 7 &&
+      r.data.range.days === 45,
+    JSON.stringify(r.data.range)
+  )
+
+  r = await call('GET', '/api/analytics?months=12&days=120')
+  check(
+    '2 analytics límites months=12 days=120',
+    r.data.range.months === 12 && r.data.range.days === 120,
+    JSON.stringify(r.data.range)
+  )
+
+  r = await call('GET', '/api/analytics?months=2&days=6')
+  check(
+    '2 analytics bajo el mínimo → defaults',
+    r.data.range.months === 6 && r.data.range.days === 30,
+    JSON.stringify(r.data.range)
+  )
+
   r = await call('GET', '/api/analytics?months=99&days=abc')
   check(
     '2 params inválidos → defaults',

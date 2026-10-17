@@ -44,8 +44,12 @@ router.use(async (req: AuthRequest, _res, next) => {
 
 type TxType = 'INCOME' | 'EXPENSE'
 
-const ALLOWED_MONTHS = [3, 6, 12]
-const ALLOWED_TREND_DAYS = [30, 90]
+// The analytics window accepts any whole range within these bounds; the UI
+// offers the same limits as editable fields.
+const MIN_ANALYTICS_MONTHS = 3
+const MAX_ANALYTICS_MONTHS = 12
+const MIN_ANALYTICS_DAYS = 7
+const MAX_ANALYTICS_DAYS = 120
 const SORT_FIELDS = ['date', 'amount'] as const
 const DEFAULT_PER_PAGE = 20
 const MAX_PER_PAGE = 100
@@ -229,10 +233,18 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
 })
 
 // ── ANALYTICS ──────────────────────────────────────────
+
+// Reads a whole-number window from the query; missing, fractional or
+// out-of-range values fall back to the default.
+function rangeParam(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value)
+  return Number.isInteger(n) && n >= min && n <= max ? n : fallback
+}
+
 router.get('/analytics', async (req: AuthRequest, res) => {
   const userId = req.userId!
-  const months = ALLOWED_MONTHS.includes(Number(req.query.months)) ? Number(req.query.months) : 6
-  const days = ALLOWED_TREND_DAYS.includes(Number(req.query.days)) ? Number(req.query.days) : 30
+  const months = rangeParam(req.query.months, MIN_ANALYTICS_MONTHS, MAX_ANALYTICS_MONTHS, 6)
+  const days = rangeParam(req.query.days, MIN_ANALYTICS_DAYS, MAX_ANALYTICS_DAYS, 30)
 
   // Anchor every window on the client's own calendar day, so the buckets do
   // not flip hours before midnight for a user west of UTC (or after it, east).

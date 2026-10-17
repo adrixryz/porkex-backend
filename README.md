@@ -91,7 +91,7 @@ Protected (Bearer token required):
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/dashboard` | Balance, totals, 10 recent transactions, pie data |
-| GET | `/api/analytics` | `?months=3\|6\|12` `&days=30\|90` `&today=YYYY-MM-DD`; buckets, trends, insights |
+| GET | `/api/analytics` | `?months=3..12` `&days=7..120` `&today=YYYY-MM-DD`; buckets, trends, insights |
 | GET | `/api/transactions` | Filter by date range (`from`/`to` as `YYYY-MM-DD` or ISO), type, category, min, max, search; sort; paginate |
 | POST/PUT/DELETE | `/api/transactions[/:id]` | Future dates are rejected |
 | GET | `/api/categories` | Optional `?from` `&to`; per-period totals plus `allTimeCount` |
