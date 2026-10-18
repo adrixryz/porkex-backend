@@ -69,6 +69,9 @@ export async function withServer(name, run, extraEnv = {}) {
       method,
       headers: {
         'Content-Type': 'application/json',
+        // Seed/backup checks run synchronous children between calls. Avoid
+        // reusing an idle socket closed while this process was blocked.
+        Connection: 'close',
         ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
         // Existing suites use UTC calendar fixtures; timezone regressions pass
         // an explicit device zone through this fourth argument.

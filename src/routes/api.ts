@@ -424,7 +424,6 @@ router.get('/analytics', async (req: AuthRequest, res) => {
         percent: current.expense > 0 ? Math.round((value / current.expense) * 100) : 0
       }))
       .sort((a, b) => b.value - a.value)
-      .slice(0, 3)
 
     const comparisonIds = new Set([...currentByCat.keys(), ...lastByCat.keys()])
     const categoryComparison = [...comparisonIds]

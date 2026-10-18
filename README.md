@@ -27,9 +27,9 @@ in the source. Generate one with:
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
-Registration is closed by default. To prepare a new personal account, temporarily
-set `ALLOW_REGISTRATION=true`, restart the API and register through the frontend.
-Then set it back to `false` and restart. Existing accounts can still sign in.
+Registration is enabled by default and can be explicitly enabled with
+`ALLOW_REGISTRATION=true`. Set it to `false` and restart the API to hide Sign Up
+and close registration. Existing accounts can still sign in.
 
 This API runs against a hosted [Turso](https://turso.tech) database (libSQL) in
 production and a local SQLite file in development, with no code change: put the
@@ -323,6 +323,8 @@ Comments are optional (200 characters); legacy description payloads remain suppo
 Migration 005 adds exceptions bound to a recurring rule and exact scheduled day. PUT /api/recurring/:id/occurrences/YYYY-MM-DD accepts SKIP or EDIT. Skipping advances the durable cursor once; edits override amount, same-type category, optional comment and tags only for that occurrence. Processed requests can be acknowledged again without recreating deleted history. A changed/processed target returns 409 rather than acting on a later occurrence. Changing schedule/type can cancel an incompatible pending edit; category edits/deletion are guarded while an override depends on it.
 
 GET /api/analytics/comparison accepts mode=year|week, anchor=YYYY-MM-DD, today and weekStart. Selected periods compare with the immediately preceding period; current periods use equal elapsed calendar coverage (Feb 29 clamps to Feb 28 in a non-leap comparison year). Results include ranges, partial status, totals, deltas and monthly/daily buckets; zero-base growth is null rather than Infinity. Queries are scoped to the account and two bounded ranges.
+
+GET /api/analytics/category-comparison powers the selector inside the existing Category comparison table. It accepts mode=month|week|year (month by default), today and weekStart, and returns expense totals and percentage changes per category, including categories present in only one period. Week/year compare equal elapsed portions; month preserves the original month-to-date versus full previous month behavior. Amounts are summed in cents, income is excluded and zero-base growth is null. No schema migration is required.
 
 The financial-workflow regression builds the complete migrated schema in a temporary database, combines tags/aliases, a commentless movement, a next-only edit and comparison totals, then creates and restores a verified SQLite backup and reads the recovered relations through Prisma. No real Turso database is used.
 

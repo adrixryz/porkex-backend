@@ -1,13 +1,24 @@
 import { addDays, dayKey } from './dates'
 const DAY = 86400000
 export function comparisonRanges(
-  mode: 'year' | 'week',
+  mode: 'month' | 'year' | 'week',
   anchor: Date,
   today: Date,
   weekStart: number
 ) {
   let currentStart: Date, currentEnd: Date, previousStart: Date, previousEnd: Date
-  if (mode === 'year') {
+  if (mode === 'month') {
+    currentStart = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1))
+    currentEnd = new Date(
+      Math.min(
+        Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 1),
+        addDays(today, 1).getTime()
+      )
+    )
+    previousStart = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() - 1, 1))
+    // Preserve the existing Category comparison: month to date vs all of last month.
+    previousEnd = currentStart
+  } else if (mode === 'year') {
     const year = anchor.getUTCFullYear()
     currentStart = new Date(Date.UTC(year, 0, 1))
     const fullEnd = new Date(Date.UTC(year + 1, 0, 1))
@@ -30,10 +41,55 @@ export function comparisonRanges(
   }
   if (currentStart > today) return null
   const partial =
-    mode === 'year'
-      ? currentEnd.getTime() !== Date.UTC(anchor.getUTCFullYear() + 1, 0, 1)
-      : currentEnd.getTime() - currentStart.getTime() < 7 * DAY
+    mode === 'month'
+      ? currentEnd.getTime() !== Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 1)
+      : mode === 'year'
+        ? currentEnd.getTime() !== Date.UTC(anchor.getUTCFullYear() + 1, 0, 1)
+        : currentEnd.getTime() - currentStart.getTime() < 7 * DAY
   return { currentStart, currentEnd, previousStart, previousEnd, partial }
+}
+
+export function compareCategories(
+  ranges: NonNullable<ReturnType<typeof comparisonRanges>>,
+  rows: {
+    amount: number
+    date: Date
+    category: { id: number; name: string; color: string | null }
+  }[]
+) {
+  const groups = new Map<
+    number,
+    { name: string; color: string; current: number; previous: number }
+  >()
+  for (const row of rows) {
+    const current = row.date >= ranges.currentStart && row.date < ranges.currentEnd
+    const previous = row.date >= ranges.previousStart && row.date < ranges.previousEnd
+    if (!current && !previous) continue
+    const group = groups.get(row.category.id) ?? {
+      name: row.category.name,
+      color: row.category.color || '#5F6368',
+      current: 0,
+      previous: 0
+    }
+    group[current ? 'current' : 'previous'] += row.amount
+    groups.set(row.category.id, group)
+  }
+  return [...groups.values()]
+    .sort(
+      (a, b) => b.current - a.current || b.previous - a.previous || a.name.localeCompare(b.name)
+    )
+    .map(group => ({
+      name: group.name,
+      color: group.color,
+      current: group.current / 100,
+      previous: group.previous / 100,
+      changePercent:
+        group.previous === 0
+          ? group.current === 0
+            ? 0
+            : null
+          : Math.round(((group.current - group.previous) / group.previous) * 10000) / 100
+    }))
 }
 export function compareMovements(
   mode: 'year' | 'week',
