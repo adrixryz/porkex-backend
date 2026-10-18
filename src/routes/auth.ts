@@ -10,7 +10,8 @@ const router = Router()
 const MAX_NAME_LENGTH = 80
 const MAX_EMAIL_LENGTH = 254
 
-const registrationEnabled = () => process.env.ALLOW_REGISTRATION === 'true'
+const registrationEnabled = () =>
+  !process.env.ALLOW_REGISTRATION || process.env.ALLOW_REGISTRATION === 'true'
 
 router.get('/config', (_req, res) => {
   res.json({ registrationEnabled: registrationEnabled() })

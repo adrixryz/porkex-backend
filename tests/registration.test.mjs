@@ -7,7 +7,7 @@ await withServer(
   async ctx => {
     const { call, check, dbFile, state } = ctx
     check(
-      'registration config is public and closed by default',
+      'registration config is public and explicitly closed',
       (await call('GET', '/auth/config')).data.registrationEnabled === false
     )
     check(
@@ -32,7 +32,7 @@ await withServer(
       (await call('GET', '/api/profile')).status === 200
     )
   },
-  { ALLOW_REGISTRATION: '' }
+  { ALLOW_REGISTRATION: 'false' }
 )
 
 await withServer(
@@ -40,11 +40,11 @@ await withServer(
   async ctx => {
     const { call, check } = ctx
     check(
-      'explicit registration switch is visible to clients',
+      'registration is enabled by default',
       (await call('GET', '/auth/config')).data.registrationEnabled === true
     )
     check(
-      'explicit switch permits preparing an account',
+      'default registration permits preparing an account',
       (
         await call('POST', '/auth/register', {
           name: 'Owner',
@@ -54,5 +54,5 @@ await withServer(
       ).status === 201
     )
   },
-  { ALLOW_REGISTRATION: 'true' }
+  { ALLOW_REGISTRATION: '' }
 )
