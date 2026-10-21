@@ -126,6 +126,7 @@ async function materializeUser(userId: number, today: Date): Promise<RecurringRe
             categoryId: overrideByDate.get(dayKey(date))?.categoryId ?? rule.categoryId,
             userId,
             date,
+            editedAt: new Date(),
             recurringId: id
           }))
         })

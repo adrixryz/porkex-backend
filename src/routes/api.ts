@@ -707,6 +707,7 @@ router.post('/transactions', async (req: AuthRequest, res) => {
         // A missing date defaults to today's calendar day (UTC midnight), not
         // to the current instant: `date` is a day, `createdAt` is the clock.
         date: v.date ?? res.locals.today,
+        editedAt: new Date(),
         ...(clientId ? { clientId } : {})
       },
       include: { category: true, ...tagInclude }
