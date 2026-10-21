@@ -24,20 +24,12 @@ export function comparisonRanges(
     const fullEnd = new Date(Date.UTC(year + 1, 0, 1))
     currentEnd = fullEnd <= addDays(today, 1) ? fullEnd : addDays(today, 1)
     previousStart = new Date(Date.UTC(year - 1, 0, 1))
-    if (currentEnd.getTime() === fullEnd.getTime()) previousEnd = currentStart
-    else {
-      const last = addDays(currentEnd, -1)
-      const finalDay = Math.min(
-        last.getUTCDate(),
-        new Date(Date.UTC(year - 1, last.getUTCMonth() + 1, 0)).getUTCDate()
-      )
-      previousEnd = addDays(new Date(Date.UTC(year - 1, last.getUTCMonth(), finalDay)), 1)
-    }
+    previousEnd = currentStart
   } else {
     currentStart = addDays(anchor, -((anchor.getUTCDay() - weekStart + 7) % 7))
     currentEnd = new Date(Math.min(addDays(currentStart, 7).getTime(), addDays(today, 1).getTime()))
     previousStart = addDays(currentStart, -7)
-    previousEnd = new Date(previousStart.getTime() + currentEnd.getTime() - currentStart.getTime())
+    previousEnd = currentStart
   }
   if (currentStart > today) return null
   const partial =

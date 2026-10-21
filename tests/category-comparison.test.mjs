@@ -38,8 +38,8 @@ await withServer('category-comparison', async ctx => {
     name: 'Food',
     color: byName.Food.color,
     current: 0.3,
-    previous: 0.2,
-    changePercent: 50
+    previous: 100.2,
+    changePercent: -99.7
   })
   assert.equal(week.categoryComparison.find(row => row.name === 'Transport').changePercent, -100)
   assert.equal(
@@ -50,15 +50,15 @@ await withServer('category-comparison', async ctx => {
     week.categoryComparison.some(row => row.name === income.name),
     false
   )
-  assert.equal(week.ranges.previous.to, '2024-02-28')
+  assert.equal(week.ranges.previous.to, '2024-03-03')
   const month = await load('month')
   assert.equal(month.categoryComparison.find(row => row.name === 'Food').previous, 100.2)
   assert.equal(month.ranges.previous.to, '2024-02-29')
   const year = await load('year')
   assert.equal(year.categoryComparison.find(row => row.name === 'Food').current, 100.5)
-  assert.equal(year.categoryComparison.find(row => row.name === 'Food').previous, 0.5)
+  assert.equal(year.categoryComparison.find(row => row.name === 'Food').previous, 200.5)
   assert.equal(year.categoryComparison.find(row => row.name === 'Housing').changePercent, -100)
-  assert.equal(year.ranges.previous.to, '2023-03-06')
+  assert.equal(year.ranges.previous.to, '2023-12-31')
   const sunday = await ctx.call(
     'GET',
     '/api/analytics/category-comparison?mode=week&today=2024-03-06&weekStart=SUNDAY'

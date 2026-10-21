@@ -6,11 +6,11 @@ require('ts-node/register/transpile-only')
 const { comparisonRanges, compareMovements } = require('../src/lib/comparison.ts')
 const date = value => new Date(value + 'T00:00:00Z')
 const leap = comparisonRanges('year', date('2024-01-01'), date('2024-02-29'), 1)
-assert.equal(leap.previousEnd.toISOString().slice(0, 10), '2023-03-01')
+assert.equal(leap.previousEnd.toISOString().slice(0, 10), '2024-01-01')
 assert.equal(leap.currentEnd.toISOString().slice(0, 10), '2024-03-01')
 const week = comparisonRanges('week', date('2024-01-01'), date('2024-01-03'), 1)
 assert.equal(week.previousStart.toISOString().slice(0, 10), '2023-12-25')
-assert.equal(week.previousEnd.toISOString().slice(0, 10), '2023-12-28')
+assert.equal(week.previousEnd.toISOString().slice(0, 10), '2024-01-01')
 assert.equal(
   comparisonRanges('week', date('2024-01-03'), date('2024-01-03'), 0)
     .currentStart.toISOString()
@@ -45,8 +45,10 @@ await withServer('comparison', async ctx => {
   )
   assert.equal(result.status, 200)
   assert.equal(result.data.current.income, 25)
-  assert.equal(result.data.previous.expense, 10)
-  assert.equal(result.data.ranges.previous.to, '2023-02-28')
+  assert.equal(result.data.previous.expense, 910)
+  assert.equal(result.data.ranges.previous.to, '2023-12-31')
+  assert.equal(result.data.buckets[2].previous.expense, 900)
+  assert.equal(result.data.buckets[2].included, false)
   assert.equal(
     (await ctx.call('GET', '/api/analytics/comparison?mode=week&anchor=2090-01-01')).status,
     400
@@ -58,6 +60,6 @@ await withServer('comparison', async ctx => {
     0
   )
   console.log(
-    'PASS comparisons: equal partial periods, leap day, year boundary, week preference, zero bases and ownership'
+    'PASS comparisons: full previous periods, leap day, year boundary, week preference, zero bases and ownership'
   )
 })
