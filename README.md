@@ -43,7 +43,7 @@ inside the URL, never in the code or the schema.
 | --- | --- |
 | `npm run dev` | Dev server with Node's built-in watch mode + ts-node |
 | `npm run build` | Compiles TypeScript to `dist/` |
-| `npm start` | Builds, then runs `dist/index.js` |
+| `npm start` | Runs the previously compiled `dist/index.js`; build first |
 | `npm test` | Integration tests (`tests/run.mjs`) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
@@ -350,11 +350,13 @@ Only the account named by `SEED_EMAIL` is ever read or written.
     and return to the anchor day afterwards, instead of drifting earlier.
   - Deleting a rule keeps the movements it already created as plain history;
     their `recurringId` becomes null.
-- Access tokens have no `expiresIn`: a session ends when the user logs out.
-  This is deliberate for a single-user app — being asked to log in again on the
-  phone is worse than the (small, personal) window a leaked token would open.
-  If the threat model changes, add `expiresIn` in `src/routes/auth.ts` and a
-  refresh flow before shortening it.
+- Access tokens have no `expiresIn`. An indexed account-version check on each
+  authenticated request makes revocation effective on the next request.
+  `POST /api/sessions/revoke` and a successful `PUT /api/password` increment
+  `sessionVersion` atomically and return `{ success: true, token }`. Store the
+  replacement token to keep the requesting browser signed in; older tokens
+  receive 401. A token without a version means version 0. A database outage
+  returns 503 rather than expiring the session. These actions are online only.
 - Weeks start on Monday, matching the frontend.
 - Currency is a display preference. There is no conversion between currencies.
 
@@ -364,10 +366,45 @@ Comments are optional (200 characters); legacy description payloads remain suppo
 
 Migration 005 adds exceptions bound to a recurring rule and exact scheduled day. PUT /api/recurring/:id/occurrences/YYYY-MM-DD accepts SKIP or EDIT. Skipping advances the durable cursor once; edits override amount, same-type category, optional comment and tags only for that occurrence. Processed requests can be acknowledged again without recreating deleted history. A changed/processed target returns 409 rather than acting on a later occurrence. Changing schedule/type can cancel an incompatible pending edit; category edits/deletion are guarded while an override depends on it.
 
-GET /api/analytics/comparison accepts mode=year|week, anchor=YYYY-MM-DD, today and weekStart. Selected periods compare with the immediately preceding period; current periods use equal elapsed calendar coverage (Feb 29 clamps to Feb 28 in a non-leap comparison year). Results include ranges, partial status, totals, deltas and monthly/daily buckets; zero-base growth is null rather than Infinity. Queries are scoped to the account and two bounded ranges.
+GET /api/analytics/comparison accepts mode=year|week, anchor=YYYY-MM-DD, today and weekStart. It compares the selected period through today (or its full duration for historical periods) with the complete preceding period. Weekly boundaries respect weekStart; annual previous ranges cover January 1 through December 31, including leap years. Results include ranges, partial status, totals, deltas and monthly/daily buckets; included describes current-period coverage only, and previous buckets remain complete. Zero-base growth is null rather than Infinity. Queries are scoped to the account and two bounded ranges.
 
-GET /api/analytics/category-comparison powers the selector inside the existing Category comparison table. It accepts mode=month|week|year (month by default), today and weekStart, and returns expense totals and percentage changes per category, including categories present in only one period. Week/year compare equal elapsed portions; month preserves the original month-to-date versus full previous month behavior. Amounts are summed in cents, income is excluded and zero-base growth is null. No schema migration is required.
+GET /api/analytics/category-comparison powers the selector inside the existing Category comparison table. It accepts mode=month|week|year (month by default), today and weekStart, and returns expense totals and percentage changes per category, including categories present in only one period. All three modes compare the current period to date with the full previous period; the monthly behavior is unchanged. Amounts are summed in cents, income is excluded and zero-base growth is null.
 
 The financial-workflow regression builds the complete migrated schema in a temporary database, combines tags/aliases, a commentless movement, a next-only edit and comparison totals, then creates and restores a verified SQLite backup and reads the recovered relations through Prisma. No real Turso database is used.
+
+A future skipped occurrence is retained in its own date-specific ledger. It does not move the processed-history watermark into the future: re-scheduling to an earlier day still generates legitimate new dates, while the explicitly skipped date remains excluded across schedule edits and resume.
+
+## Recurrence cache, session baseline and production startup
+
+Complete `ready` recurrence checks are shared for at most 30 seconds per account,
+local day and zone. Pending work and failures are never cached. Rule/occurrence
+writes and category changes invalidate the account; generations prevent older
+in-flight work from republishing a stale result. Other processes may take up to
+30 seconds to observe writes. `RECURRING_CACHE_TTL_MS=0` disables completion
+caching for direct-database calendar fixtures; production defaults to 30 seconds.
+
+This development revision adds `User.sessionVersion` to the disposable baseline
+and seed data, without a new incremental migration. Before using it against an
+older test database, explicitly recreate it with the following command:
+
+```sh
+npm run db:seed -- --fresh
+```
+
+This deletes all Porkex accounts/data. Existing baseline checksums
+will not match; do not run `db:apply` against that older database. After resetting
+test data, clear old app caches/outboxes on your devices before signing in again.
+No hosted reset is performed by tests, startup or CI.
+
+Production installation/build is `npm ci && npm run build`; startup is
+`npm start`, which runs `dist/index.js` directly. It does not invoke TypeScript,
+seed data or change the schema. Keep the build command configured separately
+in the hosting dashboard; starting without `dist/` requires building first.
+
+Both repositories include a Linux frontend/API integration job in addition to
+their existing checks. It tests the triggering revision against the counterpart's
+main, supports manual `counterpart_ref`, records both SHAs and uploads failure
+traces. Public checkouts need no extra repository credentials; the harness uses
+temporary SQLite and never a production database.
 
 A future skipped occurrence is retained in its own date-specific ledger. It does not move the processed-history watermark into the future: re-scheduling to an earlier day still generates legitimate new dates, while the explicitly skipped date remains excluded across schedule edits and resume.
