@@ -23,7 +23,6 @@ import {
   addDays,
   dayKey,
   isDayString,
-  maxAllowedDay,
   monthKey,
   parseDay,
   parseInstant,
@@ -604,7 +603,8 @@ async function validateTransactionInput(
     date?: unknown
     clientId?: unknown
   },
-  db: Prisma.TransactionClient = prisma
+  db: Prisma.TransactionClient = prisma,
+  today: Date = todayInZone()
 ): Promise<{
   error?: string
   amount?: number
@@ -652,7 +652,7 @@ async function validateTransactionInput(
   if (body.date !== undefined && body.date !== null && body.date !== '') {
     const parsed = parseDay(body.date)
     if (!parsed) return { error: 'Invalid date.' }
-    if (parsed > maxAllowedDay()) return { error: 'Date cannot be in the future.' }
+    if (parsed > today) return { error: 'Date cannot be in the future.' }
     date = parsed
   }
 
@@ -693,7 +693,7 @@ router.post('/transactions', async (req: AuthRequest, res) => {
       if (existing) return res.status(200).json(serializeTransaction(existing))
     }
 
-    const v = await validateTransactionInput(userId, req.body ?? {})
+    const v = await validateTransactionInput(userId, req.body ?? {}, prisma, res.locals.today)
     if (v.error) return res.status(400).json({ error: v.error })
 
     const tx = await prisma.transaction.create({
@@ -735,19 +735,15 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
     const editedAt = parseInstant(req.body?.editedAt)
     const mutationId = req.body?.mutationId
     if (typeof mutationId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(mutationId) || !editedAt) {
-      return res
-        .status(428)
-        .json({
-          code: 'CLIENT_UPDATE_REQUIRED',
-          error: 'Update Porkex before editing this movement.'
-        })
+      return res.status(428).json({
+        code: 'CLIENT_UPDATE_REQUIRED',
+        error: 'Update Porkex before editing this movement.'
+      })
     }
     if (editedAt.getTime() > Date.now() + 5 * 60_000) {
-      return res
-        .status(400)
-        .json({
-          error: 'The device clock is ahead. Enable automatic date and time before retrying.'
-        })
+      return res.status(400).json({
+        error: 'The device clock is ahead. Enable automatic date and time before retrying.'
+      })
     }
     const result = await prisma.$transaction(async db => {
       const existing = await db.transaction.findFirst({
@@ -763,7 +759,7 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
       ) {
         return { tx: existing, syncStatus: 'superseded' }
       }
-      const v = await validateTransactionInput(userId, req.body, db)
+      const v = await validateTransactionInput(userId, req.body, db, res.locals.today)
       if (v.error) return { status: 400, error: v.error }
       const tx = await db.transaction.update({
         where: { id: txId },
