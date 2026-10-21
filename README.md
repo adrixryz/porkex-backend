@@ -249,6 +249,22 @@ For a disposable test account that should regenerate on every deployment:
 npm ci && npm run build && npm run db:apply && npm run db:seed -- --reset
 ```
 
+While the whole database is disposable, use the fresh seed workflow instead:
+
+```bash
+npm ci && npm run build && npm run db:seed -- --fresh
+```
+
+`--fresh` drops **all Porkex accounts and tables**, creates the current schema
+directly from `schema.prisma`, then generates the seed account. No separate
+`db:apply` or incremental application of migrations 006/007 is needed. Migration
+history is registered only to keep the existing maintenance tools compatible.
+The schema reset commits before account generation: if generation fails, retry
+the command to populate the recreated tables. Use this only for disposable test
+data. `--reset` still replaces only the selected account and preserves others.
+The seeder supplies stable create IDs for categories/budgets and initialized
+edit metadata for every movement, so the synchronization fixes work with demos.
+
 Keep `npm start` as the start command. The reset affects the account selected
 by `SEED_EMAIL`, so keep that value consistent between deploys. If you configured
 `SEED_MONTHS=6` previously, remove it or set it to `24` for year comparisons.

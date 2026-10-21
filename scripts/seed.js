@@ -6,6 +6,7 @@
 //
 //   npm run db:seed            # skips (exit 0) when the account already exists
 //   npm run db:seed -- --reset # wipes that account's data first
+//   npm run db:seed -- --fresh # recreates ALL Porkex tables, then seeds
 //
 // Configuration, all optional:
 //   SEED_EMAIL     default seed@porkex.test
@@ -21,12 +22,80 @@
 const { PrismaClient } = require('@prisma/client')
 const { PrismaLibSQL } = require('@prisma/adapter-libsql')
 const { randomUUID } = require('node:crypto')
+const { spawnSync } = require('node:child_process')
+const path = require('node:path')
 const { loadEnvironment, databaseConfig, createClient, safeError } = require('./lib/database')
+const { loadMigrations, buildReference, describe, sameSchema } = require('./lib/migrations')
 const bcrypt = require('bcryptjs')
 
 loadEnvironment()
 
 const RESET = process.argv.includes('--reset')
+const FRESH = process.argv.includes('--fresh')
+
+async function recreateSchema(client) {
+  const schema = spawnSync(
+    process.execPath,
+    [
+      require.resolve('prisma/build/index.js'),
+      'migrate',
+      'diff',
+      '--from-empty',
+      '--to-schema-datamodel',
+      path.join(__dirname, '..', 'prisma', 'schema.prisma'),
+      '--script'
+    ],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, DATABASE_URL: 'file::memory:', TURSO_AUTH_TOKEN: '' }
+    }
+  )
+  if (schema.error || schema.status !== 0)
+    throw new Error(
+      'Could not generate the current test schema: ' + (schema.error?.message || schema.stderr)
+    )
+  const migrations = loadMigrations()
+  const reference = await buildReference(migrations)
+  let tx
+  try {
+    tx = await client.transaction('write')
+    // Children first, including aliases and next-only exceptions. Unrelated
+    // tables are never dropped; unexpected references fail transactionally.
+    for (const table of [
+      'OccurrenceTag',
+      'OccurrenceOverride',
+      'TransactionTag',
+      'TagReference',
+      'Tag',
+      'Transaction',
+      'RecurringRule',
+      'Budget',
+      'Category',
+      'User',
+      '_PorkexMigration'
+    ])
+      await tx.execute(`DROP TABLE IF EXISTS "${table}"`)
+    await tx.executeMultiple(schema.stdout)
+    if (!sameSchema(await describe(tx), reference.versions.at(-1)))
+      throw new Error('The current schema and migration history disagree.')
+    // Register this fresh baseline for existing maintenance tools. No incremental
+    // migrations or historical data conversions run against the configured DB.
+    await tx.execute(
+      'CREATE TABLE "_PorkexMigration" ("id" TEXT NOT NULL PRIMARY KEY, "checksum" TEXT NOT NULL, "appliedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)'
+    )
+    for (const migration of migrations)
+      await tx.execute({
+        sql: 'INSERT INTO "_PorkexMigration" (id, checksum) VALUES (?, ?)',
+        args: [migration.id, migration.checksum]
+      })
+    if ((await tx.execute('PRAGMA foreign_key_check')).rows.length)
+      throw new Error('Fresh schema has foreign-key violations.')
+    await tx.commit()
+  } finally {
+    tx?.close()
+    reference.client.close()
+  }
+}
 
 const CONFIG = {
   email: (process.env.SEED_EMAIL || 'seed@porkex.test').toLowerCase(),
@@ -223,6 +292,9 @@ function buildTransactions(categoriesByName, startDate, recurringIds, day) {
     .map((row, index) => ({
       ...row,
       clientId: 'seed-row-' + index,
+      createdAt: row.date,
+      editedAt: row.date,
+      lastEditId: 'seed-edit-' + index,
       description: !row.recurringId && index % 6 === 0 ? '' : row.description
     }))
 }
@@ -298,7 +370,13 @@ const TAG_NAMES = [
 ]
 
 async function seedAccount(db, user, startDate, day) {
-  await db.category.createMany({ data: CATEGORIES.map(c => ({ ...c, userId: user.id })) })
+  await db.category.createMany({
+    data: CATEGORIES.map((c, index) => ({
+      ...c,
+      userId: user.id,
+      clientId: 'seed-category-' + index
+    }))
+  })
   const categories = await db.category.findMany({ where: { userId: user.id } })
   const byName = Object.fromEntries(categories.map(c => [c.name, c]))
   const tags = TAG_NAMES.map((name, position) => ({
@@ -410,7 +488,13 @@ async function seedAccount(db, user, startDate, day) {
       nextDate: addDays(commute.nextDate, 7)
     }
   })
-  await db.budget.createMany({ data: buildBudgets(byName).map(b => ({ ...b, userId: user.id })) })
+  await db.budget.createMany({
+    data: buildBudgets(byName).map((b, index) => ({
+      ...b,
+      userId: user.id,
+      clientId: 'seed-budget-' + index
+    }))
+  })
   return {
     transactions: transactions.length,
     tags: tags.length,
@@ -425,15 +509,23 @@ async function seedAccount(db, user, startDate, day) {
 }
 
 async function main() {
+  if (FRESH && RESET) throw new Error('Use either --reset or --fresh, not both.')
+  if (process.argv.slice(2).some(arg => !['--reset', '--fresh'].includes(arg)))
+    throw new Error('Usage: npm run db:seed -- [--reset | --fresh]')
   if (!Number.isInteger(CONFIG.months) || CONFIG.months < 1 || CONFIG.months > 120)
     throw new Error('SEED_MONTHS must be an integer between 1 and 120.')
   const day = calendarToday(CONFIG.timeZone)
   const startDate = new Date(
     Date.UTC(day.getUTCFullYear(), day.getUTCMonth() - CONFIG.months + 1, 1)
   )
-  const client = createClient(databaseConfig())
-  const prisma = new PrismaClient({ adapter: new PrismaLibSQL(client) })
+  const client = createClient(databaseConfig({ mustExist: !FRESH }))
+  let prisma
   try {
+    if (FRESH) {
+      console.log('Recreating all Porkex tables for disposable test data.')
+      await recreateSchema(client)
+    }
+    prisma = new PrismaClient({ adapter: new PrismaLibSQL(client) })
     console.log(`Seeding ${CONFIG.email} with ${CONFIG.months} months of data (${CONFIG.timeZone})`)
     console.log(
       `  window: ${startDate.toISOString().slice(0, 10)} -> ${day.toISOString().slice(0, 10)}`
@@ -469,7 +561,7 @@ async function main() {
     console.log(`  balance ${((result.earned - result.spent) / 100).toFixed(2)} ${CONFIG.currency}`)
     console.log(`Log in as ${CONFIG.email} with the configured SEED_PASSWORD.`)
   } finally {
-    await prisma.$disconnect()
+    await prisma?.$disconnect()
     client.close()
   }
 }
