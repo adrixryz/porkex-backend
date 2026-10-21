@@ -678,9 +678,9 @@ router.post('/transactions', async (req: AuthRequest, res) => {
 
   let clientId: string | null = null
   try {
-    const v = await validateTransactionInput(userId, req.body)
-    if (v.error) return res.status(400).json({ error: v.error })
-    clientId = v.clientId ?? null
+    const parsed = parseClientId(req.body?.clientId)
+    if (!parsed.ok) return res.status(400).json({ error: 'Invalid clientId.' })
+    clientId = parsed.value
 
     // Idempotent replay: the frontend queues writes that fail and sends them
     // again later, and a create whose response was lost in transit must not
@@ -689,6 +689,9 @@ router.post('/transactions', async (req: AuthRequest, res) => {
       const existing = await findByClientId(clientId)
       if (existing) return res.status(200).json(serializeTransaction(existing))
     }
+
+    const v = await validateTransactionInput(userId, req.body ?? {})
+    if (v.error) return res.status(400).json({ error: v.error })
 
     const tx = await prisma.transaction.create({
       data: {
@@ -1409,9 +1412,9 @@ router.post('/recurring', async (req: AuthRequest, res) => {
 
   let clientId: string | null = null
   try {
-    const v = await validateRecurringInput(userId, req.body)
-    if (v.error) return res.status(400).json({ error: v.error })
-    clientId = v.clientId ?? null
+    const parsed = parseClientId(req.body?.clientId)
+    if (!parsed.ok) return res.status(400).json({ error: 'Invalid clientId.' })
+    clientId = parsed.value
 
     // Idempotent replay, exactly like POST /transactions: the frontend queues
     // writes that fail, and a create whose response was lost must not turn
@@ -1420,6 +1423,9 @@ router.post('/recurring', async (req: AuthRequest, res) => {
       const existing = await findByClientId(clientId)
       if (existing) return res.status(200).json(serializeRule(existing))
     }
+
+    const v = await validateRecurringInput(userId, req.body ?? {})
+    if (v.error) return res.status(400).json({ error: v.error })
 
     const created = await prisma.recurringRule.create({
       data: {
