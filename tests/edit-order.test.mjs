@@ -29,11 +29,12 @@ await withServer('edit-order', async ctx => {
   assert.equal(tie.data.amount, 40)
   assert.equal((await ctx.call('PUT', path, newer)).data.amount, 40)
   assert.equal((await ctx.call('PUT', path, { ...payload, mutationId: null })).status, 428)
-  assert.equal(
-    (await ctx.call('PUT', path, { ...newer, editedAt: new Date(now + 600_000).toISOString() }))
-      .status,
-    400
-  )
+  const clockRejected = await ctx.call('PUT', path, {
+    ...newer,
+    editedAt: new Date(now + 600_000).toISOString()
+  })
+  assert.equal(clockRejected.status, 400)
+  assert.equal(clockRejected.data.code, 'DEVICE_CLOCK_AHEAD')
   const parallel = await Promise.all([
     ctx.call('PUT', path, { ...older, mutationId: 'parallel-old' }),
     ctx.call('PUT', path, { ...newer, mutationId: 'z', amount: 50 })

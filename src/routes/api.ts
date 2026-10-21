@@ -743,6 +743,7 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
     }
     if (editedAt.getTime() > Date.now() + 5 * 60_000) {
       return res.status(400).json({
+        code: 'DEVICE_CLOCK_AHEAD',
         error: 'The device clock is ahead. Enable automatic date and time before retrying.'
       })
     }
