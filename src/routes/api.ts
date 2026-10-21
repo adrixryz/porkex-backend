@@ -868,20 +868,32 @@ function validateCategoryInput(body: Record<string, unknown>): {
 
 router.post('/categories', async (req: AuthRequest, res) => {
   const userId = req.userId!
-  const v = validateCategoryInput(req.body ?? {})
-  if (v.error) return res.status(400).json({ error: v.error })
+  const parsed = parseClientId(req.body?.clientId)
+  if (!parsed.ok) return res.status(400).json({ error: 'Invalid clientId.' })
+  const clientId = parsed.value
+  const findExisting = () => prisma.category.findFirst({ where: { userId, clientId } })
 
   try {
+    if (clientId) {
+      const existing = await findExisting()
+      if (existing) return res.status(200).json(existing)
+    }
+    const v = validateCategoryInput(req.body ?? {})
+    if (v.error) return res.status(400).json({ error: v.error })
     if (await isDuplicateCategoryName(userId, v.name!)) {
       return res.status(409).json({ error: 'A category with that name already exists.' })
     }
     const cat = await prisma.category.create({
-      data: { name: v.name!, type: v.type!, color: v.color ?? null, userId }
+      data: { name: v.name!, type: v.type!, color: v.color ?? null, userId, clientId }
     })
     res.status(201).json(cat)
   } catch (error) {
     // Two concurrent creates with the same name can both pass the check above.
     if (isUniqueViolation(error)) {
+      if (clientId) {
+        const existing = await findExisting()
+        if (existing) return res.status(200).json(existing)
+      }
       return res.status(409).json({ error: 'A category with that name already exists.' })
     }
     console.error('Category creation failed.', error)
@@ -1142,6 +1154,27 @@ router.get('/budgets', async (req: AuthRequest, res) => {
 
 router.post('/budgets', async (req: AuthRequest, res) => {
   const userId = req.userId!
+  const parsed = parseClientId(req.body?.clientId)
+  if (!parsed.ok) return res.status(400).json({ error: 'Invalid clientId.' })
+  const clientId = parsed.value
+  const findExisting = () =>
+    prisma.budget.findFirst({
+      where: { userId, clientId },
+      include: { category: { select: { id: true, name: true, color: true, type: true } } }
+    })
+  const replyExisting = async () => {
+    if (!clientId) return false
+    const existing = await findExisting()
+    if (!existing) return false
+    res.status(200).json({ ...existing, amount: fromCents(existing.amount) })
+    return true
+  }
+  try {
+    if (await replyExisting()) return
+  } catch (error) {
+    console.error('Budget replay failed.', error)
+    return res.status(500).json({ error: 'Budget creation failed.' })
+  }
   const amount = toCents(req.body?.amount)
   if (amount === null) {
     return res
@@ -1169,13 +1202,14 @@ router.post('/budgets', async (req: AuthRequest, res) => {
     }
 
     const budget = await prisma.budget.create({
-      data: { userId, categoryId, amount, period },
+      data: { userId, categoryId, amount, period, clientId },
       include: { category: { select: { id: true, name: true, color: true, type: true } } }
     })
     res.status(201).json({ ...budget, amount: fromCents(budget.amount) })
   } catch (error) {
     // Two concurrent creates can both pass the "already exists" check.
     if (isUniqueViolation(error)) {
+      if (await replyExisting()) return
       return res.status(409).json({ error: 'This category already has a budget for that period.' })
     }
     console.error('Budget creation failed.', error)

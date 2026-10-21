@@ -33,6 +33,7 @@ model User {
 
 model Category {
   id                  Int                  @id @default(autoincrement())
+  clientId            String?
   name                String
   type                String
   color               String?
@@ -44,6 +45,7 @@ model Category {
   occurrenceOverrides OccurrenceOverride[]
 
   @@unique([userId, name])
+  @@unique([userId, clientId])
   @@index([userId])
 }
 
@@ -54,6 +56,7 @@ model Category {
 // A spending limit for one category, repeated every WEEK or MONTH.
 model Budget {
   id         Int      @id @default(autoincrement())
+  clientId   String?
   categoryId Int
   // A spending limit is a property of its category, so it goes away with it.
   category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
@@ -64,6 +67,7 @@ model Budget {
   createdAt  DateTime @default(now())
 
   @@unique([userId, categoryId, period])
+  @@unique([userId, clientId])
   @@index([userId, period])
 }
 
