@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { randomUUID } from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import type { Prisma } from '@prisma/client'
 import { AuthRequest, authMiddleware } from '../middleware/auth'
@@ -602,7 +603,8 @@ async function validateTransactionInput(
     categoryId: unknown
     date?: unknown
     clientId?: unknown
-  }
+  },
+  db: Prisma.TransactionClient = prisma
 ): Promise<{
   error?: string
   amount?: number
@@ -633,7 +635,7 @@ async function validateTransactionInput(
     return { error: 'clientId must be up to 64 characters of A-Z, a-z, 0-9, dash or underscore.' }
   }
 
-  const category = await prisma.category.findFirst({ where: { id: categoryId, userId } })
+  const category = await db.category.findFirst({ where: { id: categoryId, userId } })
   if (!category) return { error: 'Category not found.' }
 
   if (category.type !== body.type) {
@@ -654,7 +656,8 @@ async function validateTransactionInput(
     date = parsed
   }
 
-  const tagIds = body.tagIds === undefined ? undefined : await resolveTagIds(userId, body.tagIds)
+  const tagIds =
+    body.tagIds === undefined ? undefined : await resolveTagIds(userId, body.tagIds, db)
   if (tagIds === null) return { error: 'Select 0–5 unique tags belonging to this account.' }
   return {
     amount,
@@ -729,29 +732,59 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
     return res.status(400).json({ error: 'Invalid transaction id.' })
   }
   try {
-    // Verify ownership
-    const existing = await prisma.transaction.findFirst({ where: { id: txId, userId } })
-    if (!existing) return res.status(404).json({ error: 'Transaction not found.' })
-
-    const v = await validateTransactionInput(userId, req.body)
-    if (v.error) return res.status(400).json({ error: v.error })
-
-    const tx = await prisma.transaction.update({
-      where: { id: txId },
-      // Without a date in the body the existing one is kept (partial PUT on the date field).
-      data: {
-        amount: v.amount!,
-        type: v.type!,
-        description: v.description!,
-        categoryId: v.categoryId!,
-        ...(v.date ? { date: v.date } : {}),
-        ...(v.tagIds !== undefined
-          ? { tags: { deleteMany: {}, create: v.tagIds.map(tagId => ({ tagId })) } }
-          : {})
-      },
-      include: { category: true, ...tagInclude }
+    const editedAt = parseInstant(req.body?.editedAt)
+    const mutationId = req.body?.mutationId
+    if (typeof mutationId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(mutationId) || !editedAt) {
+      return res
+        .status(428)
+        .json({
+          code: 'CLIENT_UPDATE_REQUIRED',
+          error: 'Update Porkex before editing this movement.'
+        })
+    }
+    if (editedAt.getTime() > Date.now() + 5 * 60_000) {
+      return res
+        .status(400)
+        .json({
+          error: 'The device clock is ahead. Enable automatic date and time before retrying.'
+        })
+    }
+    const result = await prisma.$transaction(async db => {
+      const existing = await db.transaction.findFirst({
+        where: { id: txId, userId },
+        include: { category: true, ...tagInclude }
+      })
+      if (!existing) return { status: 404, error: 'Transaction not found.' }
+      const previousTime = (existing.editedAt ?? existing.createdAt).getTime()
+      if (existing.lastEditId === mutationId) return { tx: existing, syncStatus: 'applied' }
+      if (
+        editedAt.getTime() < previousTime ||
+        (editedAt.getTime() === previousTime && mutationId <= (existing.lastEditId ?? ''))
+      ) {
+        return { tx: existing, syncStatus: 'superseded' }
+      }
+      const v = await validateTransactionInput(userId, req.body, db)
+      if (v.error) return { status: 400, error: v.error }
+      const tx = await db.transaction.update({
+        where: { id: txId },
+        data: {
+          amount: v.amount!,
+          type: v.type!,
+          description: v.description!,
+          categoryId: v.categoryId!,
+          editedAt,
+          lastEditId: mutationId,
+          ...(v.date ? { date: v.date } : {}),
+          ...(v.tagIds !== undefined
+            ? { tags: { deleteMany: {}, create: v.tagIds.map(tagId => ({ tagId })) } }
+            : {})
+        },
+        include: { category: true, ...tagInclude }
+      })
+      return { tx, syncStatus: 'applied' }
     })
-    res.json(serializeTransaction(tx))
+    if ('error' in result) return res.status(result.status!).json({ error: result.error })
+    res.json({ ...serializeTransaction(result.tx), syncStatus: result.syncStatus })
   } catch (error) {
     console.error('Transaction update failed.', error)
     res.status(500).json({ error: 'Transaction update failed.' })
@@ -1020,7 +1053,7 @@ router.delete('/categories/:id', async (req: AuthRequest, res) => {
       prisma.recurringRule.deleteMany({ where: { categoryId: catId, userId } }),
       prisma.transaction.updateMany({
         where: { categoryId: catId, userId },
-        data: { categoryId: targetId }
+        data: { categoryId: targetId, editedAt: new Date(), lastEditId: randomUUID() }
       }),
       prisma.category.delete({ where: { id: catId } })
     ])

@@ -113,6 +113,8 @@ model RecurringRule {
 
 model Transaction {
   id          Int              @id @default(autoincrement())
+  editedAt    DateTime?
+  lastEditId  String?
   amount      Int
   type        String
   // Set by the client so a retried write cannot create a duplicate: the

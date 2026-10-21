@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import net from 'node:net'
+import { randomUUID } from 'node:crypto'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const BACKEND_DIR = resolve(HERE, '..')
@@ -65,6 +66,14 @@ export async function withServer(name, run, extraEnv = {}) {
   const results = []
   let base
   const call = async (method, route, body, headers = {}) => {
+    if (
+      method === 'PUT' &&
+      /^\/api\/transactions\/\d+$/.test(route) &&
+      body &&
+      body.mutationId === undefined
+    ) {
+      body = { ...body, mutationId: randomUUID(), editedAt: new Date().toISOString() }
+    }
     const res = await fetch(base + route, {
       method,
       headers: {
@@ -86,7 +95,12 @@ export async function withServer(name, run, extraEnv = {}) {
     } catch {
       /* empty or non-JSON body */
     }
-    return { status: res.status, data, contentType: res.headers.get('content-type'), headers: res.headers }
+    return {
+      status: res.status,
+      data,
+      contentType: res.headers.get('content-type'),
+      headers: res.headers
+    }
   }
 
   const check = (label, ok, extra = '') => {
@@ -95,9 +109,13 @@ export async function withServer(name, run, extraEnv = {}) {
 
   const stopServer = () =>
     new Promise(resolveStop => {
-      if (!server?.pid || server.exitCode !== null || server.signalCode !== null) return resolveStop()
+      if (!server?.pid || server.exitCode !== null || server.signalCode !== null)
+        return resolveStop()
       const timer = setTimeout(() => server.kill('SIGKILL'), 2000)
-      server.once('close', () => { clearTimeout(timer); resolveStop() })
+      server.once('close', () => {
+        clearTimeout(timer)
+        resolveStop()
+      })
       server.kill()
       // Windows keeps the SQLite file locked until the process is really gone.
     })
@@ -117,7 +135,9 @@ export async function withServer(name, run, extraEnv = {}) {
       encoding: 'utf8'
     })
     if (apply.error || apply.status !== 0) {
-      throw new Error(`Database preparation failed (status ${apply.status}): ${apply.error?.message ?? ''}\n${apply.stdout}\n${apply.stderr}`)
+      throw new Error(
+        `Database preparation failed (status ${apply.status}): ${apply.error?.message ?? ''}\n${apply.stdout}\n${apply.stderr}`
+      )
     }
     const port = await freePort()
     base = `http://localhost:${port}`

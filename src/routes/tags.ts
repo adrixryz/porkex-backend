@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { randomUUID } from 'node:crypto'
 import { prisma } from '../lib/prisma'
 import type { AuthRequest } from '../middleware/auth'
 import { tagName, validTagId } from '../lib/tags'
@@ -134,7 +135,13 @@ tagsRouter.delete('/:id', async (req: AuthRequest, res, next) => {
       where: { id: String(req.params.id), tag: { userId: req.userId! } }
     })
     if (!ref) return res.status(404).json({ error: 'Tag not found.' })
-    await prisma.tag.delete({ where: { id: ref.tagId } })
+    await prisma.$transaction(async db => {
+      await db.transaction.updateMany({
+        where: { userId: req.userId!, tags: { some: { tagId: ref.tagId } } },
+        data: { editedAt: new Date(), lastEditId: randomUUID() }
+      })
+      await db.tag.delete({ where: { id: ref.tagId } })
+    })
     res.json({ success: true })
   } catch (error) {
     next(error)
