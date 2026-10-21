@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { withServer, createTestUser } from './helpers.mjs'
+import migrationsApi from '../scripts/lib/migrations.js'
 
 const output = mkdtempSync(join(tmpdir(), 'porkex-financial-backup-'))
 try {
@@ -99,7 +100,7 @@ try {
         aliases: 2
       }
     )
-    assert.equal(saved.migrations[0].n, 5)
+    assert.equal(saved.migrations[0].n, migrationsApi.loadMigrations().length)
     await request('DELETE', '/tags/workflow-tag')
     assert.equal((await request('GET', '/recurring'))[0].nextException.tags.length, 0)
     assert.equal((await request('GET', '/transactions')).items.length, 1)
