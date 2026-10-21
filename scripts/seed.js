@@ -541,6 +541,7 @@ async function main() {
             name: CONFIG.name,
             email: CONFIG.email,
             password,
+            sessionVersion: 0,
             currency: CONFIG.currency
           }
         })

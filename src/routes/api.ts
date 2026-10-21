@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { randomUUID } from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import type { Prisma } from '@prisma/client'
-import { AuthRequest, authMiddleware } from '../middleware/auth'
+import { AuthRequest, authMiddleware, generateToken } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { isValidCurrency } from '../lib/currencies'
 import { fromCents, toCents, toCentsNonNegative } from '../lib/money'
@@ -1765,6 +1765,23 @@ router.put('/profile', async (req: AuthRequest, res) => {
 })
 
 // ── PASSWORD ───────────────────────────────────────────
+router.post('/sessions/revoke', async (req: AuthRequest, res) => {
+  try {
+    const version = req.sessionVersion!
+    const updated = await prisma.user.updateMany({
+      where: { id: req.userId!, sessionVersion: version },
+      data: { sessionVersion: { increment: 1 } }
+    })
+    if (!updated.count)
+      return res.status(401).json({ error: 'This session was revoked. Sign in again.' })
+    res.json({ success: true, token: generateToken(req.userId!, version + 1) })
+  } catch {
+    res
+      .status(503)
+      .json({ error: 'Could not confirm session revocation. Sign in again if necessary.' })
+  }
+})
+
 router.put('/password', async (req: AuthRequest, res) => {
   const userId = req.userId!
   const currentPassword = req.body?.currentPassword
@@ -1793,11 +1810,13 @@ router.put('/password', async (req: AuthRequest, res) => {
     if (!valid) return res.status(400).json({ error: 'Current password is incorrect.' })
 
     const hashed = await bcrypt.hash(newPassword, 10)
-    await prisma.user.update({ where: { id: userId }, data: { password: hashed } })
-
-    // Existing tokens stay valid on purpose: they carry only the user id, and
-    // the session model is "never expires" (see README).
-    res.json({ success: true })
+    const updated = await prisma.user.updateMany({
+      where: { id: userId, sessionVersion: req.sessionVersion!, password: user.password },
+      data: { password: hashed, sessionVersion: { increment: 1 } }
+    })
+    if (!updated.count)
+      return res.status(401).json({ error: 'This session was revoked. Sign in again.' })
+    res.json({ success: true, token: generateToken(userId, req.sessionVersion! + 1) })
   } catch (error) {
     console.error('Password change failed.', error)
     res.status(500).json({ error: 'Password change failed.' })

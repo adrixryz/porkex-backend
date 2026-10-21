@@ -58,6 +58,7 @@ await withServer('password', async ctx => {
   r = await call('PUT', '/api/password', { currentPassword: 'secret1', newPassword: 'nueva123' })
   check('cambio válido → 200', r.status === 200, `status=${r.status}`)
   check('respuesta { success: true }', r.data?.success === true, JSON.stringify(r.data))
+  ctx.state.token = r.data.token
 
   r = await call('GET', '/api/profile')
   check(

@@ -32,6 +32,7 @@ try {
       const db=createClient({url:process.env.DATABASE_URL});
       (async()=>{
         await runMigrations(db,loadMigrations().slice(0,5));
+        await db.execute('ALTER TABLE "User" DROP COLUMN "sessionVersion"');
         await db.execute("INSERT INTO User(name,email,password) VALUES ('Disposable','old@example.test','hash')");
       })().then(()=>db.close()).catch(e=>{console.error(e);process.exitCode=1});
     `
@@ -53,7 +54,7 @@ try {
         const invalid=await db.execute('SELECT COUNT(*) n FROM "Transaction" WHERE editedAt IS NULL OR editedAt != createdAt OR lastEditId IS NULL');
         const cats=await db.execute('SELECT COUNT(*) n FROM Category WHERE clientId IS NOT NULL');
         const budgets=await db.execute('SELECT COUNT(*) n FROM Budget WHERE clientId IS NOT NULL');
-        const users=await db.execute('SELECT email FROM User ORDER BY email');
+        const users=await db.execute('SELECT email, sessionVersion FROM User ORDER BY email');
         const history=await db.execute('SELECT COUNT(*) n FROM _PorkexMigration');
         const foreign=await db.execute('PRAGMA foreign_key_check');
         console.log(JSON.stringify({rows:rows.rows[0].n,invalid:invalid.rows[0].n,cats:cats.rows[0].n,budgets:budgets.rows[0].n,users:users.rows,history:history.rows[0].n,foreign:foreign.rows.length}));
@@ -68,7 +69,7 @@ try {
     assert.equal(snapshot.invalid, 0)
     assert.equal(snapshot.cats, 9)
     assert.equal(snapshot.budgets, 5)
-    assert.deepEqual(snapshot.users, [{ email: 'fresh@example.test' }])
+    assert.deepEqual(snapshot.users, [{ email: 'fresh@example.test', sessionVersion: 0 }])
     assert.equal(snapshot.history, migrationsApi.loadMigrations().length)
     assert.equal(snapshot.foreign, 0)
     assert.match(run(['scripts/apply-schema.js'], env), /0 new/)

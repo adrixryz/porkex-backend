@@ -15,6 +15,7 @@ model User {
   name             String
   email            String          @unique
   password         String
+  sessionVersion   Int             @default(0)
   currency         String          @default("USD")
   // Display preferences, mirrored from the frontend so they follow the account
   // to any browser. Plain strings, not enums: the additive deploy tool adds

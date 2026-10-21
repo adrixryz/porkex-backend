@@ -4,6 +4,7 @@ CREATE TABLE "User" (
     "name" TEXT NOT NULL,
     "email" TEXT NOT NULL,
     "password" TEXT NOT NULL,
+    "sessionVersion" INTEGER NOT NULL DEFAULT 0,
     "currency" TEXT NOT NULL DEFAULT 'USD',
     "defaultPeriod" TEXT NOT NULL DEFAULT 'week',
     "firstDayOfWeek" TEXT NOT NULL DEFAULT 'MONDAY',

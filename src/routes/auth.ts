@@ -88,7 +88,7 @@ router.post('/register', async (req, res) => {
       console.error('Category seeding failed for user', user.id, seedError)
     }
 
-    const token = generateToken(user.id)
+    const token = generateToken(user.id, user.sessionVersion)
     res.status(201).json({
       token,
       user: {
@@ -133,7 +133,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password.' })
     }
 
-    const token = generateToken(user.id)
+    const token = generateToken(user.id, user.sessionVersion)
     res.json({
       token,
       user: {

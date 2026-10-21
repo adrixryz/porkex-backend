@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
+import { prisma } from '../lib/prisma'
 
 // Read lazily so dotenv.config() (called in index.ts) has already run by the time
 // the first request arrives, even though this module is imported earlier.
@@ -26,9 +27,10 @@ export function assertJwtSecretIsConfigured(): void {
 
 export interface AuthRequest extends Request {
   userId?: number
+  sessionVersion?: number
 }
 
-export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
+export async function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -37,16 +39,35 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
 
   const token = authHeader.split(' ')[1]
 
+  let decoded: { userId: number; sessionVersion?: number }
   try {
-    const decoded = jwt.verify(token, getJwtSecret()) as { userId: number }
-    req.userId = decoded.userId
-    next()
+    decoded = jwt.verify(token, getJwtSecret()) as typeof decoded
+    if (
+      !Number.isInteger(decoded.userId) ||
+      decoded.userId <= 0 ||
+      !Number.isInteger(decoded.sessionVersion ?? 0) ||
+      (decoded.sessionVersion ?? 0) < 0
+    )
+      throw new Error('Invalid claims')
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token.' })
   }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { sessionVersion: true }
+    })
+    if (!user || user.sessionVersion !== (decoded.sessionVersion ?? 0))
+      return res.status(401).json({ error: 'This session was revoked. Sign in again.' })
+    req.userId = decoded.userId
+    req.sessionVersion = user.sessionVersion
+  } catch {
+    return res.status(503).json({ error: 'Could not verify the session. Please retry.' })
+  }
+  next()
 }
 
-// No expiresIn: the token never expires, so the session only ends on logout.
-export function generateToken(userId: number): string {
-  return jwt.sign({ userId }, getJwtSecret())
+// Long-lived sessions remain valid until their account version is revoked.
+export function generateToken(userId: number, sessionVersion = 0): string {
+  return jwt.sign({ userId, sessionVersion }, getJwtSecret())
 }
