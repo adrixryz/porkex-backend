@@ -4,8 +4,58 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      counterpart_ref:
+        description: Frontend branch, tag or SHA
+        default: main
+        type: string
 
 jobs:
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: file:./prisma/ci.db
+      TURSO_AUTH_TOKEN: ''
+      JWT_SECRET: ci-secret
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: porkex-backend
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: adrixryz/porkex-web-app
+          ref: ${{ inputs.counterpart_ref || 'main' }}
+          path: porkex-web-app
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            porkex-web-app/package-lock.json
+            porkex-backend/package-lock.json
+      - run: |
+          git -C porkex-web-app rev-parse HEAD
+          git -C porkex-backend rev-parse HEAD
+      - run: npm ci
+        working-directory: porkex-backend
+      - run: npm ci
+        working-directory: porkex-web-app
+      - run: npx --no-install vp exec playwright install --with-deps chromium
+        working-directory: porkex-web-app
+      - run: npx --no-install vp run test:integration
+        working-directory: porkex-web-app
+        env:
+          TURSO_AUTH_TOKEN: ''
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-traces
+          path: porkex-web-app/test-results/
   ci:
     strategy:
       fail-fast: false
