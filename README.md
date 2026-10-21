@@ -112,6 +112,32 @@ Protected (Bearer token required):
 | PUT | `/api/password` | Change the password; verifies the current one (400, never 401, on mismatch) |
 | POST | `/api/transactions` | Accepts an optional `clientId`; a replay returns `200` with the stored row instead of creating a second one |
 
+## Synchronization protocol
+
+Transaction edits require `mutationId` (a stable UUID) and `editedAt` (an ISO UTC
+instant captured when Save is pressed). Missing metadata returns `428` with
+`code: CLIENT_UPDATE_REQUIRED`. An edit more than five minutes ahead of the
+server is rejected: keep automatic date/time enabled on both devices.
+
+The edit with the latest save time wins, even if an older offline request
+arrives later. Equal times use the mutation ID as a deterministic tie-breaker.
+The response includes `syncStatus: applied | superseded`; both are `200`, and
+superseded means the returned movement already contains a newer edit. Replays
+keep their original metadata. Existing sessions and authentication are unchanged.
+
+Category and budget creates now support `clientId`, scoped to the account,
+like transaction and rule creates. A replay returns the existing record with
+`200`; real duplicates with another key still return `409`. Existing keyed
+transaction/rule creates are recognized before checking references that may
+have changed since the original save.
+
+Migrations `006_catalog_client_ids` and `007_transaction_edit_order` preserve
+existing data and initialize existing edit times from creation times. For a
+future release, verify a backup, apply the migrations and publish the backend
+before publishing the frontend. Do not edit previously applied migrations.
+Movement dates must not exceed the current day in `X-Porkex-Time-Zone`; future
+dates remain available for recurring schedules.
+
 ## Testing
 
 `npm test` boots the real server against a throwaway SQLite database in the
