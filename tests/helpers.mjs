@@ -144,7 +144,11 @@ export async function withServer(name, run, extraEnv = {}) {
     }
     const port = await freePort()
     base = `http://localhost:${port}`
-    server = spawn(process.execPath, ['-r', 'ts-node/register/transpile-only', 'src/index.ts'], {
+    const entry =
+      extraEnv.PORKEX_TEST_COMPILED === 'true'
+        ? ['dist/index.js']
+        : ['-r', 'ts-node/register/transpile-only', 'src/index.ts']
+    server = spawn(process.execPath, entry, {
       cwd: BACKEND_DIR,
       env: { ...env, PORT: String(port) },
       stdio: ['ignore', 'pipe', 'pipe']
