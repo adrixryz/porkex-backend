@@ -1,6 +1,9 @@
 // Calendar schedules use UTC-midnight days; callers choose the user's local day.
 import { prisma } from './prisma'
 import { addDays, todayInZone, dayKey } from './dates'
+import { createRecurringCache } from './recurringCache'
+import type { RecurringResult } from './recurringCache'
+export type { RecurringResult } from './recurringCache'
 
 export const RECURRING_FREQUENCIES = ['DAY', 'WEEK', 'MONTH', 'YEAR'] as const
 export type RecurringFrequency = (typeof RECURRING_FREQUENCIES)[number]
@@ -53,24 +56,21 @@ export function firstOccurrenceOnOrAfter(
   return candidate < minDay ? nextOccurrence(candidate, frequency, interval, anchorDay) : candidate
 }
 
-export type RecurringResult = { created: number; state: 'ready' | 'pending' }
-const running = new Map<string, Promise<RecurringResult>>()
+const recurringCache = createRecurringCache(
+  materializeUser,
+  Date.now,
+  process.env.RECURRING_CACHE_TTL_MS === '0' ? 0 : 30_000
+)
+export const invalidateRecurring = (userId: number) => recurringCache.invalidate(userId)
 
-/** Share concurrent catch-up work, never cache completion across later writes. */
+/** Reuse a recent complete check for the same local day and zone. */
 export function runDueRules(
   userId: number,
   now = new Date(),
   timeZone = 'America/Lima'
 ): Promise<RecurringResult> {
   const today = todayInZone(timeZone, now)
-  const key = `${userId}:${dayKey(today)}`
-  const existing = running.get(key)
-  if (existing) return existing
-  const work = materializeUser(userId, today).finally(() => {
-    running.delete(key)
-  })
-  running.set(key, work)
-  return work
+  return recurringCache.run(userId, today, timeZone)
 }
 
 async function materializeUser(userId: number, today: Date): Promise<RecurringResult> {
@@ -81,6 +81,7 @@ async function materializeUser(userId: number, today: Date): Promise<RecurringRe
     where: { userId, active: true },
     select: { id: true, nextDate: true }
   })
+  if (!rules.length) return { created: 0, state: 'ready' }
   let created = 0
   for (const { id } of rules.filter(rule => rule.nextDate <= today)) {
     created += await prisma.$transaction(async tx => {

@@ -53,6 +53,9 @@ export async function withServer(name, run, extraEnv = {}) {
   const env = {
     ...process.env,
     ALLOW_REGISTRATION: 'true',
+    // Calendar fixtures edit rows directly outside the API's invalidation path.
+    // Cache-specific API tests override this to exercise the production TTL.
+    RECURRING_CACHE_TTL_MS: '0',
     ...extraEnv,
     // A suite may change rate limits, never redirect tests to a real database.
     DATABASE_URL: databaseUrl,

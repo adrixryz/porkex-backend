@@ -17,6 +17,7 @@ import {
   nextOccurrence,
   parseFrequency,
   runDueRules,
+  invalidateRecurring,
   type RecurringFrequency
 } from '../lib/recurring'
 import {
@@ -38,8 +39,9 @@ router.use(authMiddleware)
 // Materialize due recurring rules before the request runs, so any response
 // already reflects today's movements — including the first request after the
 // free-tier server woke up. Empty schedules only perform indexed reads.
-async function catchUp(req: AuthRequest, res: import('express').Response) {
+async function catchUp(req: AuthRequest, res: import('express').Response, refresh = false) {
   try {
+    if (refresh) invalidateRecurring(req.userId!)
     const result = await runDueRules(req.userId!, new Date(), res.locals.timeZone)
     res.setHeader('X-Porkex-Recurring-State', result.state)
   } catch (error) {
@@ -53,6 +55,13 @@ router.use(async (req: AuthRequest, res, next) => {
   if (!isTimeZone(timeZone)) return res.status(400).json({ error: 'Invalid time zone.' })
   res.locals.timeZone = timeZone
   res.locals.today = todayInZone(timeZone)
+  if (
+    !['GET', 'HEAD'].includes(req.method) &&
+    (req.path.startsWith('/recurring') || /^\/categories\/\d+$/.test(req.path))
+  ) {
+    invalidateRecurring(req.userId!)
+    res.once('finish', () => invalidateRecurring(req.userId!))
+  }
   await catchUp(req, res)
   next()
 })
@@ -1514,7 +1523,7 @@ router.post('/recurring', async (req: AuthRequest, res) => {
 
     // Materialize right away when the first occurrence falls on today, so the
     // response already reflects it instead of waiting for the next request.
-    await catchUp(req, res)
+    await catchUp(req, res, true)
 
     const fresh = await prisma.recurringRule.findUnique({
       where: { id: created.id },
@@ -1614,7 +1623,7 @@ router.put('/recurring/:id', async (req: AuthRequest, res) => {
 
     // A resume may make today's occurrence due again; settle it before
     // reading back so the response carries the advanced next date.
-    await catchUp(req, res)
+    await catchUp(req, res, true)
 
     const fresh = await prisma.recurringRule.findUnique({
       where: { id: ruleId },
