@@ -62,6 +62,7 @@ async function recreateSchema(client) {
     // Children first, including aliases and next-only exceptions. Unrelated
     // tables are never dropped; unexpected references fail transactionally.
     for (const table of [
+      'Favorite',
       'FinancialReceipt',
       'Transfer',
       'OccurrenceTag',
@@ -178,6 +179,7 @@ const DESCRIPTIONS = {
 async function wipeUser(prisma, userId) {
   // The caller wraps deletion and regeneration in one transaction. Cascades
   // remove occurrence/tag links and aliases before the owning records go away.
+  await prisma.favorite.deleteMany({ where: { userId } })
   const rules = await prisma.recurringRule.deleteMany({ where: { userId } })
   const budgets = await prisma.budget.deleteMany({ where: { userId } })
   const transactions = await prisma.transaction.deleteMany({ where: { userId } })
@@ -538,6 +540,18 @@ async function seedAccount(db, user, startDate, day) {
       amount: 5000,
       date: day,
       comment: 'Cash withdrawal'
+    }
+  })
+  await db.favorite.create({
+    data: {
+      id: `seed-favorite-${user.id}`,
+      userId: user.id,
+      name: 'Lunch',
+      type: 'EXPENSE',
+      amount: 1200,
+      comment: 'Lunch',
+      categoryId: byName.Food.id,
+      accountId: main.id
     }
   })
   return {

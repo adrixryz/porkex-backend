@@ -11,6 +11,7 @@ datasource db {
 }
 
 model User {
+  favorites        Favorite[]
   id               Int                @id @default(autoincrement())
   name             String
   email            String             @unique
@@ -257,4 +258,20 @@ model FinancialReceipt {
   response String
 
   @@id([userId, key])
+}
+
+model Favorite {
+  id         String   @id
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id])
+  name       String
+  type       String
+  amount     Int
+  comment    String   @default("")
+  categoryId Int
+  accountId  String
+  tagIds     String   @default("[]")
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
 }

@@ -146,3 +146,18 @@ CREATE TABLE "FinancialReceipt" (
   PRIMARY KEY ("userId", "key"),
   CONSTRAINT "FinancialReceipt_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
+
+CREATE TABLE "Favorite" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "userId" INTEGER NOT NULL,
+  "name" TEXT NOT NULL,
+  "type" TEXT NOT NULL,
+  "amount" INTEGER NOT NULL,
+  "comment" TEXT NOT NULL DEFAULT '',
+  "categoryId" INTEGER NOT NULL,
+  "accountId" TEXT NOT NULL,
+  "tagIds" TEXT NOT NULL DEFAULT '[]',
+  "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "Favorite_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+);
+CREATE INDEX "Favorite_userId_createdAt_idx" ON "Favorite"("userId", "createdAt");

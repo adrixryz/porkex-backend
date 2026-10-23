@@ -31,6 +31,7 @@ import {
   todayInZone
 } from '../lib/dates'
 
+import { favoritesRouter } from './favorites'
 import { accountsRouter } from './accounts'
 import { movementAccount, requireFunds, financialWrite, FinanceError } from '../lib/finance'
 
@@ -72,6 +73,7 @@ router.use(async (req: AuthRequest, res, next) => {
 })
 
 router.use(accountsRouter)
+router.use('/favorites', favoritesRouter)
 router.use('/tags', tagsRouter)
 router.use('/analytics', comparisonsRouter)
 router.use('/recurring', occurrencesRouter)
@@ -789,42 +791,58 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
         error: 'The device clock is ahead. Enable automatic date and time before retrying.'
       })
     }
-    const result = await financialWrite(userId, `movement:edit:${mutationId}`, async db => {
-      const existing = await db.transaction.findFirst({
-        where: { id: txId, userId },
-        include: { category: true, account: true, ...tagInclude }
-      })
-      if (!existing) return { status: 404, error: 'Transaction not found.' }
-      const previousTime = (existing.editedAt ?? existing.createdAt).getTime()
-      if (existing.lastEditId === mutationId) return { tx: existing, syncStatus: 'applied' }
-      if (
-        editedAt.getTime() < previousTime ||
-        (editedAt.getTime() === previousTime && mutationId <= (existing.lastEditId ?? ''))
-      ) {
-        return { tx: existing, syncStatus: 'superseded' }
+    const result = await financialWrite(
+      userId,
+      `movement:edit:${mutationId}`,
+      async db => {
+        const existing = await db.transaction.findFirst({
+          where: { id: txId, userId },
+          include: { category: true, account: true, ...tagInclude }
+        })
+        if (!existing) return { status: 404, error: 'Transaction not found.' }
+        const previousTime = (existing.editedAt ?? existing.createdAt).getTime()
+        if (existing.lastEditId === mutationId) return { tx: existing, syncStatus: 'applied' }
+        if (
+          editedAt.getTime() < previousTime ||
+          (editedAt.getTime() === previousTime && mutationId <= (existing.lastEditId ?? ''))
+        ) {
+          return { tx: existing, syncStatus: 'superseded' }
+        }
+        const v = await validateTransactionInput(userId, req.body, db, res.locals.today)
+        if (v.error) return { status: 400, error: v.error }
+        const tx = await db.transaction.update({
+          where: { id: txId },
+          data: {
+            accountId: v.accountId!,
+            amount: v.amount!,
+            type: v.type!,
+            description: v.description!,
+            categoryId: v.categoryId!,
+            editedAt,
+            lastEditId: mutationId,
+            ...(v.date ? { date: v.date } : {}),
+            ...(v.tagIds !== undefined
+              ? { tags: { deleteMany: {}, create: v.tagIds.map(tagId => ({ tagId })) } }
+              : {})
+          },
+          include: { category: true, account: true, ...tagInclude }
+        })
+        await requireFunds(userId, [existing.accountId, v.accountId], db)
+        return { tx, syncStatus: 'applied' }
+      },
+      async (db, original) => {
+        const current = await db.transaction.findFirst({
+          where: { id: txId, userId },
+          include: { category: true, account: true, ...tagInclude }
+        })
+        return current
+          ? {
+              tx: current,
+              syncStatus: current.lastEditId === mutationId ? 'applied' : 'superseded'
+            }
+          : original
       }
-      const v = await validateTransactionInput(userId, req.body, db, res.locals.today)
-      if (v.error) return { status: 400, error: v.error }
-      const tx = await db.transaction.update({
-        where: { id: txId },
-        data: {
-          accountId: v.accountId!,
-          amount: v.amount!,
-          type: v.type!,
-          description: v.description!,
-          categoryId: v.categoryId!,
-          editedAt,
-          lastEditId: mutationId,
-          ...(v.date ? { date: v.date } : {}),
-          ...(v.tagIds !== undefined
-            ? { tags: { deleteMany: {}, create: v.tagIds.map(tagId => ({ tagId })) } }
-            : {})
-        },
-        include: { category: true, account: true, ...tagInclude }
-      })
-      await requireFunds(userId, [existing.accountId, v.accountId], db)
-      return { tx, syncStatus: 'applied' }
-    })
+    )
     if ('error' in result) return res.status(result.status!).json({ error: result.error })
     invalidateRecurring(userId)
     res.json({ ...serializeTransaction(result.tx!), syncStatus: result.syncStatus })

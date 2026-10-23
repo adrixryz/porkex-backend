@@ -84,14 +84,18 @@ export async function accountList(userId: number, db: Prisma.TransactionClient =
 export async function financialWrite<T>(
   userId: number,
   key: string | null,
-  task: (db: Prisma.TransactionClient) => Promise<T>
+  task: (db: Prisma.TransactionClient) => Promise<T>,
+  replay?: (db: Prisma.TransactionClient, original: T) => Promise<T>
 ): Promise<T> {
   return prisma.$transaction(async db => {
     if (key) {
       const receipt = await db.financialReceipt.findUnique({
         where: { userId_key: { userId, key } }
       })
-      if (receipt) return JSON.parse(receipt.response) as T
+      if (receipt) {
+        const original = JSON.parse(receipt.response) as T
+        return replay ? replay(db, original) : original
+      }
     }
     const result = await task(db)
     if (key && !(result && typeof result === 'object' && 'error' in result))
