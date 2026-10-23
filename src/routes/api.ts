@@ -519,6 +519,13 @@ router.get('/transactions', async (req: AuthRequest, res) => {
       where.categoryId = parsed
     }
 
+    if (q.tagId !== undefined && q.tagId !== '') {
+      if (typeof q.tagId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(q.tagId))
+        return res.status(400).json({ error: 'Invalid tagId.' })
+      const ref = await prisma.tagReference.findFirst({ where: { id: q.tagId, tag: { userId } } })
+      where.tags = { some: { tagId: ref?.tagId ?? q.tagId, tag: { userId } } }
+    }
+
     let minAmount: number | undefined
     if (q.min !== undefined && q.min !== '') {
       const min = toCentsNonNegative(q.min)
