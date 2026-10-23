@@ -1,0 +1,194 @@
+import { Router } from 'express'
+import { randomUUID } from 'node:crypto'
+import type { AuthRequest } from '../middleware/auth'
+import { prisma } from '../lib/prisma'
+import { accountList, balance, financialWrite, FinanceError, requireFunds } from '../lib/finance'
+import { fromCents, toCents, toCentsNonNegative } from '../lib/money'
+import { parseDay } from '../lib/dates'
+import { invalidateRecurring } from '../lib/recurring'
+
+export const accountsRouter = Router()
+const validId = (id: unknown): id is string =>
+  typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id)
+const nameOf = (name: unknown) =>
+  typeof name === 'string' && name.trim().length > 0 && name.trim().length <= 60
+    ? name.trim()
+    : null
+const failure = (res: import('express').Response, error: unknown) => {
+  if (!(error instanceof FinanceError)) console.error('Financial operation failed.', error)
+  return res
+    .status(error instanceof FinanceError ? error.status : 500)
+    .json({
+      error:
+        error instanceof FinanceError ? error.message : 'Could not save the financial operation.'
+    })
+}
+
+accountsRouter.get('/accounts', async (req: AuthRequest, res) => {
+  try {
+    res.json(await accountList(req.userId!))
+  } catch (e) {
+    failure(res, e)
+  }
+})
+accountsRouter.post('/accounts', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!,
+      body = req.body ?? {},
+      id = body.id ?? body.clientId ?? randomUUID()
+    if (!validId(id)) throw new FinanceError('Invalid account ID.')
+    const result = await financialWrite(userId, `account:create:${id}`, async db => {
+      const name = nameOf(body.name),
+        openingBalance = toCentsNonNegative(body.openingBalance ?? 0)
+      if (!name || openingBalance === null)
+        throw new FinanceError('Enter a name and a nonnegative opening balance.')
+      const row = await db.account.create({ data: { id, name, openingBalance, userId } })
+      return {
+        ...row,
+        openingBalance: fromCents(openingBalance),
+        balance: fromCents(openingBalance)
+      }
+    })
+    invalidateRecurring(userId)
+    res.status(201).json(result)
+  } catch (e) {
+    failure(res, e)
+  }
+})
+accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!,
+      id = String(req.params.id),
+      body = req.body ?? {}
+    const result = await financialWrite(
+      userId,
+      validId(body.mutationId) ? `account:edit:${body.mutationId}` : null,
+      async db => {
+        const row = await db.account.findFirst({ where: { id, userId } })
+        if (!row) throw new FinanceError('Account not found.', 404)
+        const name = nameOf(body.name ?? row.name),
+          openingBalance = toCentsNonNegative(body.openingBalance ?? fromCents(row.openingBalance))
+        if (!name || openingBalance === null || (row.isMain && (name !== 'Main' || body.archived)))
+          throw new FinanceError('Main must remain available. Enter valid account details.')
+        if (
+          body.archived &&
+          ((await balance(userId, id, db)) !== 0 ||
+            (await db.recurringRule.count({ where: { userId, accountId: id, active: true } })))
+        )
+          throw new FinanceError(
+            'Empty the account and pause its recurring rules before archiving.',
+            409
+          )
+        await db.account.update({
+          where: { id },
+          data: {
+            name,
+            openingBalance,
+            archived: typeof body.archived === 'boolean' ? body.archived : row.archived
+          }
+        })
+        await requireFunds(userId, [id], db)
+        return { success: true }
+      }
+    )
+    invalidateRecurring(userId)
+    res.json(result)
+  } catch (e) {
+    failure(res, e)
+  }
+})
+accountsRouter.get('/transfers', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!,
+      accountId = typeof req.query.accountId === 'string' ? req.query.accountId : undefined
+    const where = {
+      userId,
+      ...(accountId ? { OR: [{ sourceId: accountId }, { destinationId: accountId }] } : {})
+    }
+    const perPage = 15,
+      total = await prisma.transfer.count({ where }),
+      totalPages = Math.max(1, Math.ceil(total / perPage))
+    const page = Math.min(totalPages, Math.max(1, Math.floor(Number(req.query.page) || 1)))
+    const rows = await prisma.transfer.findMany({
+      where,
+      include: { source: true, destination: true },
+      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * perPage,
+      take: perPage
+    })
+    res.json({
+      items: rows.map(row => ({ ...row, amount: fromCents(row.amount) })),
+      total,
+      page,
+      totalPages,
+      perPage
+    })
+  } catch (e) {
+    failure(res, e)
+  }
+})
+for (const method of ['post', 'put', 'delete'] as const)
+  accountsRouter[method](
+    method === 'post' ? '/transfers' : '/transfers/:id',
+    async (req: AuthRequest, res) => {
+      try {
+        const userId = req.userId!,
+          body = req.body ?? {},
+          id = method === 'post' ? (body.id ?? body.clientId) : String(req.params.id)
+        if (!validId(id)) throw new FinanceError('Invalid transfer ID.')
+        if (method === 'put' && !validId(body.mutationId))
+          throw new FinanceError('A stable mutation ID is required.')
+        const key = `transfer:${method}:${method === 'put' ? body.mutationId : id}`
+        const result = await financialWrite(userId, key, async db => {
+          const old = await db.transfer.findFirst({ where: { id, userId } })
+          if (method !== 'post' && !old) throw new FinanceError('Transfer not found.', 404)
+          if (method === 'delete') {
+            await db.transfer.delete({ where: { id } })
+            await requireFunds(userId, [old!.sourceId, old!.destinationId], db)
+            return { success: true }
+          }
+          const sourceId = String(body.sourceId ?? ''),
+            destinationId = String(body.destinationId ?? ''),
+            amount = toCents(body.amount),
+            date = parseDay(body.date)
+          if (
+            sourceId === destinationId ||
+            amount === null ||
+            !date ||
+            date > res.locals.today ||
+            typeof body.comment !== 'string' ||
+            body.comment.length > 200
+          )
+            throw new FinanceError(
+              'Choose different accounts, a positive amount, a valid date and a comment of at most 200 characters.'
+            )
+          const accounts = await db.account.findMany({
+            where: { userId, archived: false, id: { in: [sourceId, destinationId] } }
+          })
+          if (accounts.length !== 2) throw new FinanceError('Choose two active accounts.')
+          const data = {
+            userId,
+            sourceId,
+            destinationId,
+            amount,
+            date,
+            comment: body.comment.trim()
+          }
+          const row =
+            method === 'post'
+              ? await db.transfer.create({ data: { id, ...data } })
+              : await db.transfer.update({ where: { id }, data })
+          await requireFunds(
+            userId,
+            [sourceId, destinationId, ...(old ? [old.sourceId, old.destinationId] : [])],
+            db
+          )
+          return { ...row, amount: fromCents(row.amount) }
+        })
+        invalidateRecurring(userId)
+        res.status(method === 'post' ? 201 : 200).json(result)
+      } catch (e) {
+        failure(res, e)
+      }
+    }
+  )

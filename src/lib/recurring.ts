@@ -1,6 +1,7 @@
 // Calendar schedules use UTC-midnight days; callers choose the user's local day.
 import { prisma } from './prisma'
-import { addDays, todayInZone, dayKey } from './dates'
+import { movementAccount, balance } from './finance'
+import { addDays, todayInZone } from './dates'
 import { createRecurringCache } from './recurringCache'
 import type { RecurringResult } from './recurringCache'
 export type { RecurringResult } from './recurringCache'
@@ -75,96 +76,84 @@ export function runDueRules(
 
 async function materializeUser(userId: number, today: Date): Promise<RecurringResult> {
   const rules = await prisma.recurringRule.findMany({
-    // Native Prisma used integer DATETIMEs; the libSQL adapter writes ISO
-    // text. SQLite sorts those storage classes separately, so compare the
-    // decoded dates instead. A personal account has few active schedules.
     where: { userId, active: true },
     select: { id: true, nextDate: true }
   })
-  if (!rules.length) return { created: 0, state: 'ready' }
   let created = 0
+  let blocked = false
   for (const { id } of rules.filter(rule => rule.nextDate <= today)) {
-    created += await prisma.$transaction(async tx => {
-      // Re-read under the transaction so cursor and rows advance together.
+    const result = await prisma.$transaction(async tx => {
       const rule = await tx.recurringRule.findFirst({ where: { id, userId, active: true } })
-      if (!rule || rule.nextDate > today) return 0
+      if (!rule || rule.nextDate > today) return { count: 0, blocked: false }
       const frequency = parseFrequency(rule.frequency)
       if (!frequency) throw new Error(`Unknown recurring frequency: ${rule.frequency}`)
-      const anchorDay = rule.startDate.getUTCDate()
-      let nextDate = rule.nextDate
-      let lastProcessedDate = rule.lastProcessedDate
-      const dates: Date[] = []
+      const account = await movementAccount(userId, rule.accountId, tx)
+      let nextDate = rule.nextDate,
+        lastProcessedDate = rule.lastProcessedDate,
+        count = 0,
+        insufficient = false
       for (let walked = 0; nextDate <= today && walked < MAX_PER_PASS; walked++) {
         if (rule.endDate && nextDate > rule.endDate) break
-        if (!lastProcessedDate || nextDate > lastProcessedDate) {
-          dates.push(nextDate)
-          lastProcessedDate = nextDate
-        }
-        nextDate = nextOccurrence(nextDate, frequency, rule.interval, anchorDay)
-      }
-      // Older deployments may have generated history without the cursor.
-      const existing = dates.length
-        ? await tx.transaction.findMany({
-            where: { recurringId: id, date: { in: dates } },
-            select: { date: true }
+        const override = await tx.occurrenceOverride.findUnique({
+          where: { ruleId_date: { ruleId: id, date: nextDate } },
+          include: { tags: true }
+        })
+        const existing = await tx.transaction.findUnique({
+          where: { recurringId_date: { recurringId: id, date: nextDate } }
+        })
+        if (
+          (!lastProcessedDate || nextDate > lastProcessedDate) &&
+          !existing &&
+          override?.kind !== 'SKIP'
+        ) {
+          const amount = override?.amount ?? rule.amount
+          if (rule.type === 'EXPENSE' && (await balance(userId, account.id, tx)) < amount) {
+            insufficient = true
+            break
+          }
+          await tx.transaction.create({
+            data: {
+              accountId: account.id,
+              amount,
+              type: rule.type,
+              description: override?.comment ?? rule.description,
+              categoryId: override?.categoryId ?? rule.categoryId,
+              userId,
+              date: nextDate,
+              editedAt: new Date(),
+              recurringId: id,
+              tags: { create: (override?.tags ?? []).map(tag => ({ tagId: tag.tagId })) }
+            }
           })
-        : []
-      const stored = new Set(existing.map(row => dayKey(row.date)))
-      const overrides = await tx.occurrenceOverride.findMany({
-        where: { ruleId: id, date: { in: dates } },
-        include: { tags: true }
-      })
-      const overrideByDate = new Map(overrides.map(item => [dayKey(item.date), item]))
-      const missing = dates.filter(
-        date => !stored.has(dayKey(date)) && overrideByDate.get(dayKey(date))?.kind !== 'SKIP'
-      )
-      if (missing.length)
-        await tx.transaction.createMany({
-          data: missing.map(date => ({
-            amount: overrideByDate.get(dayKey(date))?.amount ?? rule.amount,
-            type: rule.type,
-            description: overrideByDate.get(dayKey(date))?.comment ?? rule.description,
-            categoryId: overrideByDate.get(dayKey(date))?.categoryId ?? rule.categoryId,
-            userId,
-            date,
-            editedAt: new Date(),
-            recurringId: id
-          }))
-        })
-      const edited = overrides.filter(
-        item =>
-          item.kind === 'EDIT' &&
-          missing.some(date => date.getTime() === item.date.getTime()) &&
-          item.tags.length
-      )
-      if (edited.length) {
-        const movements = await tx.transaction.findMany({
-          where: { recurringId: id, date: { in: edited.map(item => item.date) } },
-          select: { id: true, date: true }
-        })
-        await tx.transactionTag.createMany({
-          data: edited.flatMap(item =>
-            item.tags.map(tag => ({
-              transactionId: movements.find(row => row.date.getTime() === item.date.getTime())!.id,
-              tagId: tag.tagId
-            }))
-          )
-        })
+          count++
+        }
+        if (override)
+          await tx.occurrenceOverride.update({
+            where: { ruleId_date: { ruleId: id, date: nextDate } },
+            data: { processedAt: new Date() }
+          })
+        if (!lastProcessedDate || nextDate > lastProcessedDate) lastProcessedDate = nextDate
+        nextDate = nextOccurrence(nextDate, frequency, rule.interval, rule.startDate.getUTCDate())
       }
-      await tx.occurrenceOverride.updateMany({
-        where: { ruleId: id, date: { in: dates }, processedAt: null },
-        data: { processedAt: new Date() }
-      })
       await tx.recurringRule.update({
         where: { id },
         data: { nextDate, lastProcessedDate, active: !(rule.endDate && nextDate > rule.endDate) }
       })
-      return missing.length
+      return { count, blocked: insufficient }
     })
+    created += result.count
+    blocked ||= result.blocked
   }
   const remaining = await prisma.recurringRule.findMany({
     where: { userId, active: true },
     select: { nextDate: true }
   })
-  return { created, state: remaining.some(rule => rule.nextDate <= today) ? 'pending' : 'ready' }
+  return {
+    created,
+    state: blocked
+      ? 'blocked'
+      : remaining.some(rule => rule.nextDate <= today)
+        ? 'pending'
+        : 'ready'
+  }
 }

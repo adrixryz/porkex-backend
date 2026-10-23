@@ -13,6 +13,7 @@ await withServer('api', async ({ call, check, state }) => {
   })
   check('register', r.status === 201 && !!r.data.token, JSON.stringify(r.data).slice(0, 80))
   state.token = r.data.token
+  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
 
   const cats = (await call('GET', '/api/categories')).data
   check('categorías sembradas', cats.length === 9, `${cats.length}`)

@@ -11,25 +11,28 @@ datasource db {
 }
 
 model User {
-  id               Int             @id @default(autoincrement())
+  id               Int                @id @default(autoincrement())
   name             String
-  email            String          @unique
+  email            String             @unique
   password         String
-  sessionVersion   Int             @default(0)
-  currency         String          @default("USD")
+  sessionVersion   Int                @default(0)
+  currency         String             @default("USD")
   // Display preferences, mirrored from the frontend so they follow the account
   // to any browser. Plain strings, not enums: the additive deploy tool adds
   // them to an existing table, and SQLite needs a default for a NOT NULL
   // column (see scripts/apply-schema.js).
-  defaultPeriod    String          @default("week")
-  firstDayOfWeek   String          @default("MONDAY")
-  decimalSeparator String          @default(".")
+  defaultPeriod    String             @default("week")
+  firstDayOfWeek   String             @default("MONDAY")
+  decimalSeparator String             @default(".")
+  accounts         Account[]
+  receipts         FinancialReceipt[]
+  transfers        Transfer[]
   transactions     Transaction[]
   categories       Category[]
   budgets          Budget[]
   recurringRules   RecurringRule[]
   tags             Tag[]
-  createdAt        DateTime        @default(now())
+  createdAt        DateTime           @default(now())
 }
 
 model Category {
@@ -77,6 +80,9 @@ model Budget {
 // src/lib/recurring.ts), so every existing reader — dashboard, analytics,
 // budgets, the transactions list — keeps working on plain rows.
 model RecurringRule {
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id])
+
   id                Int                  @id @default(autoincrement())
   userId            Int
   user              User                 @relation(fields: [userId], references: [id])
@@ -113,6 +119,9 @@ model RecurringRule {
 }
 
 model Transaction {
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id])
+
   id          Int              @id @default(autoincrement())
   editedAt    DateTime?
   lastEditId  String?
@@ -205,4 +214,45 @@ model OccurrenceTag {
 
   @@id([ruleId, date, tagId])
   @@index([tagId])
+}
+
+model Account {
+  id             String          @id
+  userId         Int
+  user           User            @relation(fields: [userId], references: [id])
+  name           String
+  openingBalance Int             @default(0)
+  isMain         Boolean         @default(false)
+  archived       Boolean         @default(false)
+  transactions   Transaction[]
+  recurringRules RecurringRule[]
+  outgoing       Transfer[]      @relation("SourceAccount")
+  incoming       Transfer[]      @relation("DestinationAccount")
+
+  @@index([userId])
+}
+
+model Transfer {
+  id            String   @id
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id])
+  sourceId      String
+  source        Account  @relation("SourceAccount", fields: [sourceId], references: [id])
+  destinationId String
+  destination   Account  @relation("DestinationAccount", fields: [destinationId], references: [id])
+  amount        Int
+  date          DateTime
+  comment       String   @default("")
+  createdAt     DateTime @default(now())
+
+  @@index([userId, date])
+}
+
+model FinancialReceipt {
+  userId   Int
+  user     User   @relation(fields: [userId], references: [id])
+  key      String
+  response String
+
+  @@id([userId, key])
 }

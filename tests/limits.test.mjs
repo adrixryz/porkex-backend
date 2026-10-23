@@ -9,6 +9,7 @@ await withServer('limits', async ({ call, check, state }) => {
     password: 'secret1'
   })
   state.token = r.data.token
+  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
   const cats = (await call('GET', '/api/categories')).data
   const expense = cats.find(c => c.type === 'EXPENSE')
 

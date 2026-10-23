@@ -6,6 +6,7 @@ import { withServer } from './helpers.mjs'
 await withServer('orders', async ({ call, check, state }) => {
   let r = await call('POST', '/auth/register', { name: 'T', email: 'o@o.com', password: 'secret1' })
   state.token = r.data.token
+  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
   const cats = (await call('GET', '/api/categories')).data
   const expense = cats.find(c => c.type === 'EXPENSE')
 

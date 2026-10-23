@@ -31,6 +31,9 @@ import {
   todayInZone
 } from '../lib/dates'
 
+import { accountsRouter } from './accounts'
+import { movementAccount, requireFunds, financialWrite, FinanceError } from '../lib/finance'
+
 const router = Router()
 
 // Apply auth middleware to ALL routes in this file
@@ -45,6 +48,8 @@ async function catchUp(req: AuthRequest, res: import('express').Response, refres
     const result = await runDueRules(req.userId!, new Date(), res.locals.timeZone)
     res.setHeader('X-Porkex-Recurring-State', result.state)
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     res.setHeader('X-Porkex-Recurring-State', 'failed')
     console.error('Recurring catch-up failed.', error)
   }
@@ -66,6 +71,7 @@ router.use(async (req: AuthRequest, res, next) => {
   next()
 })
 
+router.use(accountsRouter)
 router.use('/tags', tagsRouter)
 router.use('/analytics', comparisonsRouter)
 router.use('/recurring', occurrencesRouter)
@@ -214,7 +220,7 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
   try {
     const transactions = await prisma.transaction.findMany({
       where: { userId },
-      include: { category: true, ...tagInclude },
+      include: { category: true, account: true, ...tagInclude },
       // Most recent by its own date first; id breaks ties between same-day entries.
       orderBy: [{ date: 'desc' }, { id: 'desc' }],
       take: 10
@@ -258,7 +264,12 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
     const totalExpense = expenseSum._sum.amount || 0
 
     res.json({
-      globalBalance: fromCents(totalIncome - totalExpense),
+      globalBalance: fromCents(
+        totalIncome -
+          totalExpense +
+          ((await prisma.account.aggregate({ where: { userId }, _sum: { openingBalance: true } }))
+            ._sum.openingBalance || 0)
+      ),
       totalIncome: fromCents(totalIncome),
       totalExpense: fromCents(totalExpense),
       transactionCount,
@@ -266,6 +277,8 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
       pieChartData
     })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Failed to load dashboard', error)
     res.status(500).json({ error: 'Failed to load dashboard' })
   }
@@ -472,6 +485,8 @@ router.get('/analytics', async (req: AuthRequest, res) => {
       }
     })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Failed to load analytics', error)
     res.status(500).json({ error: 'Failed to load analytics' })
   }
@@ -553,7 +568,7 @@ router.get('/transactions', async (req: AuthRequest, res) => {
       prisma.transaction.count({ where }),
       prisma.transaction.findMany({
         where,
-        include: { category: true, ...tagInclude },
+        include: { category: true, account: true, ...tagInclude },
         orderBy,
         skip: (requestedPage - 1) * perPage,
         take: perPage
@@ -570,7 +585,7 @@ router.get('/transactions', async (req: AuthRequest, res) => {
         ? firstPage
         : await prisma.transaction.findMany({
             where,
-            include: { category: true, ...tagInclude },
+            include: { category: true, account: true, ...tagInclude },
             orderBy,
             skip: (page - 1) * perPage,
             take: perPage
@@ -584,6 +599,8 @@ router.get('/transactions', async (req: AuthRequest, res) => {
       totalPages
     })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Failed to fetch transactions', error)
     res.status(500).json({ error: 'Failed to fetch transactions' })
   }
@@ -603,6 +620,7 @@ function parseClientId(v: unknown): ClientIdResult {
 async function validateTransactionInput(
   userId: number,
   body: {
+    accountId?: unknown
     amount: unknown
     type: unknown
     description?: unknown
@@ -615,6 +633,7 @@ async function validateTransactionInput(
   db: Prisma.TransactionClient = prisma,
   today: Date = todayInZone()
 ): Promise<{
+  accountId?: string
   error?: string
   amount?: number
   type?: TxType
@@ -668,7 +687,9 @@ async function validateTransactionInput(
   const tagIds =
     body.tagIds === undefined ? undefined : await resolveTagIds(userId, body.tagIds, db)
   if (tagIds === null) return { error: 'Select 0–5 unique tags belonging to this account.' }
+  const account = await movementAccount(userId, body.accountId, db)
   return {
+    accountId: account.id,
     amount,
     type: body.type,
     description,
@@ -685,7 +706,7 @@ router.post('/transactions', async (req: AuthRequest, res) => {
   const findByClientId = (clientId: string | null) =>
     prisma.transaction.findFirst({
       where: { clientId, userId },
-      include: { category: true, ...tagInclude }
+      include: { category: true, account: true, ...tagInclude }
     })
 
   let clientId: string | null = null
@@ -702,27 +723,39 @@ router.post('/transactions', async (req: AuthRequest, res) => {
       if (existing) return res.status(200).json(serializeTransaction(existing))
     }
 
-    const v = await validateTransactionInput(userId, req.body ?? {}, prisma, res.locals.today)
-    if (v.error) return res.status(400).json({ error: v.error })
+    const result = await financialWrite(
+      userId,
+      clientId ? `movement:create:${clientId}` : null,
+      async db => {
+        const v = await validateTransactionInput(userId, req.body ?? {}, db, res.locals.today)
+        if (v.error) throw new FinanceError(v.error)
 
-    const tx = await prisma.transaction.create({
-      data: {
-        amount: v.amount!,
-        type: v.type!,
-        description: v.description!,
-        categoryId: v.categoryId!,
-        userId,
-        tags: { create: (v.tagIds ?? []).map(tagId => ({ tagId })) },
-        // A missing date defaults to today's calendar day (UTC midnight), not
-        // to the current instant: `date` is a day, `createdAt` is the clock.
-        date: v.date ?? res.locals.today,
-        editedAt: new Date(),
-        ...(clientId ? { clientId } : {})
-      },
-      include: { category: true, ...tagInclude }
-    })
-    res.status(201).json(serializeTransaction(tx))
+        const tx = await db.transaction.create({
+          data: {
+            accountId: v.accountId!,
+            amount: v.amount!,
+            type: v.type!,
+            description: v.description!,
+            categoryId: v.categoryId!,
+            userId,
+            tags: { create: (v.tagIds ?? []).map(tagId => ({ tagId })) },
+            // A missing date defaults to today's calendar day (UTC midnight), not
+            // to the current instant: `date` is a day, `createdAt` is the clock.
+            date: v.date ?? res.locals.today,
+            editedAt: new Date(),
+            ...(clientId ? { clientId } : {})
+          },
+          include: { category: true, account: true, ...tagInclude }
+        })
+        await requireFunds(userId, [v.accountId], db)
+        return serializeTransaction(tx)
+      }
+    )
+    invalidateRecurring(userId)
+    res.status(201).json(result)
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     // Two replays can both pass the lookup above and race to insert. The unique
     // constraint catches the loser, which is the same situation as a replay
     // that had already succeeded, so answer with the stored row.
@@ -756,10 +789,10 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
         error: 'The device clock is ahead. Enable automatic date and time before retrying.'
       })
     }
-    const result = await prisma.$transaction(async db => {
+    const result = await financialWrite(userId, `movement:edit:${mutationId}`, async db => {
       const existing = await db.transaction.findFirst({
         where: { id: txId, userId },
-        include: { category: true, ...tagInclude }
+        include: { category: true, account: true, ...tagInclude }
       })
       if (!existing) return { status: 404, error: 'Transaction not found.' }
       const previousTime = (existing.editedAt ?? existing.createdAt).getTime()
@@ -775,6 +808,7 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
       const tx = await db.transaction.update({
         where: { id: txId },
         data: {
+          accountId: v.accountId!,
           amount: v.amount!,
           type: v.type!,
           description: v.description!,
@@ -786,13 +820,17 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
             ? { tags: { deleteMany: {}, create: v.tagIds.map(tagId => ({ tagId })) } }
             : {})
         },
-        include: { category: true, ...tagInclude }
+        include: { category: true, account: true, ...tagInclude }
       })
+      await requireFunds(userId, [existing.accountId, v.accountId], db)
       return { tx, syncStatus: 'applied' }
     })
     if ('error' in result) return res.status(result.status!).json({ error: result.error })
-    res.json({ ...serializeTransaction(result.tx), syncStatus: result.syncStatus })
+    invalidateRecurring(userId)
+    res.json({ ...serializeTransaction(result.tx!), syncStatus: result.syncStatus })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Transaction update failed.', error)
     res.status(500).json({ error: 'Transaction update failed.' })
   }
@@ -805,12 +843,18 @@ router.delete('/transactions/:id', async (req: AuthRequest, res) => {
     return res.status(400).json({ error: 'Invalid transaction id.' })
   }
   try {
-    const existing = await prisma.transaction.findFirst({ where: { id: txId, userId } })
-    if (!existing) return res.status(404).json({ error: 'Transaction not found.' })
-
-    await prisma.transaction.delete({ where: { id: txId } })
+    await financialWrite(userId, `movement:delete:${txId}`, async db => {
+      const existing = await db.transaction.findFirst({ where: { id: txId, userId } })
+      if (!existing) throw new FinanceError('Transaction not found.', 404)
+      await db.transaction.delete({ where: { id: txId } })
+      await requireFunds(userId, [existing.accountId], db)
+      return { success: true }
+    })
+    invalidateRecurring(userId)
     res.json({ success: true })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Delete failed.', error)
     res.status(500).json({ error: 'Delete failed.' })
   }
@@ -866,6 +910,8 @@ router.get('/categories', async (req: AuthRequest, res) => {
       })
     )
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Failed to fetch categories', error)
     res.status(500).json({ error: 'Failed to fetch categories' })
   }
@@ -928,6 +974,8 @@ router.post('/categories', async (req: AuthRequest, res) => {
     })
     res.status(201).json(cat)
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     // Two concurrent creates with the same name can both pass the check above.
     if (isUniqueViolation(error)) {
       if (clientId) {
@@ -990,6 +1038,8 @@ router.put('/categories/:id', async (req: AuthRequest, res) => {
     })
     res.json(cat)
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     if (isUniqueViolation(error)) {
       return res.status(409).json({ error: 'A category with that name already exists.' })
     }
@@ -1067,6 +1117,8 @@ router.delete('/categories/:id', async (req: AuthRequest, res) => {
 
     res.json({ success: true, moved: txCount, reassignedTo: target.name })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Delete failed.', error)
     res.status(500).json({ error: 'Delete failed.' })
   }
@@ -1187,6 +1239,8 @@ router.get('/budgets', async (req: AuthRequest, res) => {
 
     res.json({ budgets: payload, totals })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Failed to fetch budgets', error)
     res.status(500).json({ error: 'Failed to fetch budgets' })
   }
@@ -1212,6 +1266,8 @@ router.post('/budgets', async (req: AuthRequest, res) => {
   try {
     if (await replyExisting()) return
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Budget replay failed.', error)
     return res.status(500).json({ error: 'Budget creation failed.' })
   }
@@ -1247,6 +1303,8 @@ router.post('/budgets', async (req: AuthRequest, res) => {
     })
     res.status(201).json({ ...budget, amount: fromCents(budget.amount) })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     // Two concurrent creates can both pass the "already exists" check.
     if (isUniqueViolation(error)) {
       if (await replyExisting()) return
@@ -1294,6 +1352,8 @@ router.put('/budgets/:id', async (req: AuthRequest, res) => {
     })
     res.json({ ...budget, amount: fromCents(budget.amount) })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     if (isUniqueViolation(error)) {
       return res.status(409).json({ error: 'This category already has a budget for that period.' })
     }
@@ -1315,6 +1375,8 @@ router.delete('/budgets/:id', async (req: AuthRequest, res) => {
     await prisma.budget.delete({ where: { id: budgetId } })
     res.json({ success: true })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Delete failed.', error)
     res.status(500).json({ error: 'Delete failed.' })
   }
@@ -1467,6 +1529,8 @@ router.get('/recurring', async (req: AuthRequest, res) => {
     })
     res.json(rules.map(serializeRule))
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Failed to fetch recurring rules.', error)
     res.status(500).json({ error: 'Failed to fetch recurring rules.' })
   }
@@ -1501,8 +1565,10 @@ router.post('/recurring', async (req: AuthRequest, res) => {
     const v = await validateRecurringInput(userId, req.body ?? {})
     if (v.error) return res.status(400).json({ error: v.error })
 
+    const account = await movementAccount(userId, req.body.accountId)
     const created = await prisma.recurringRule.create({
       data: {
+        accountId: account.id,
         userId,
         amount: v.amount!,
         type: v.type!,
@@ -1534,6 +1600,8 @@ router.post('/recurring', async (req: AuthRequest, res) => {
     })
     res.status(201).json(serializeRule(fresh ?? created))
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     // Two replays racing: the loser answers with the stored row, like POST
     // /transactions does.
     if (clientId && isUniqueViolation(error)) {
@@ -1596,9 +1664,11 @@ router.put('/recurring/:id', async (req: AuthRequest, res) => {
           ...(existing.type !== v.type ? {} : { date: { not: nextDate } })
         }
       })
+      const account = await movementAccount(userId, req.body.accountId ?? existing.accountId, db)
       const rule = await db.recurringRule.update({
         where: { id: ruleId },
         data: {
+          accountId: account.id,
           amount: v.amount!,
           type: v.type!,
           description: v.description!,
@@ -1634,6 +1704,8 @@ router.put('/recurring/:id', async (req: AuthRequest, res) => {
     })
     res.json(serializeRule(fresh ?? updated))
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Recurring rule update failed.', error)
     res.status(500).json({ error: 'Recurring rule update failed.' })
   }
@@ -1663,6 +1735,8 @@ router.delete('/recurring/:id', async (req: AuthRequest, res) => {
 
     res.json({ success: true })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Recurring rule delete failed.', error)
     res.status(500).json({ error: 'Recurring rule delete failed.' })
   }
@@ -1690,6 +1764,8 @@ router.get('/profile', async (req: AuthRequest, res) => {
     if (!user) return res.status(404).json({ error: 'User not found.' })
     res.json(user)
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Failed to fetch profile.', error)
     res.status(500).json({ error: 'Failed to fetch profile.' })
   }
@@ -1759,6 +1835,8 @@ router.put('/profile', async (req: AuthRequest, res) => {
     })
     res.json(user)
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Profile update failed.', error)
     res.status(500).json({ error: 'Profile update failed.' })
   }
@@ -1818,6 +1896,8 @@ router.put('/password', async (req: AuthRequest, res) => {
       return res.status(401).json({ error: 'This session was revoked. Sign in again.' })
     res.json({ success: true, token: generateToken(userId, req.sessionVersion! + 1) })
   } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
     console.error('Password change failed.', error)
     res.status(500).json({ error: 'Password change failed.' })
   }

@@ -62,6 +62,8 @@ async function recreateSchema(client) {
     // Children first, including aliases and next-only exceptions. Unrelated
     // tables are never dropped; unexpected references fail transactionally.
     for (const table of [
+      'FinancialReceipt',
+      'Transfer',
       'OccurrenceTag',
       'OccurrenceOverride',
       'TransactionTag',
@@ -71,6 +73,7 @@ async function recreateSchema(client) {
       'RecurringRule',
       'Budget',
       'Category',
+      'Account',
       'User',
       '_PorkexMigration'
     ])
@@ -180,6 +183,9 @@ async function wipeUser(prisma, userId) {
   const transactions = await prisma.transaction.deleteMany({ where: { userId } })
   const tags = await prisma.tag.deleteMany({ where: { userId } })
   const categories = await prisma.category.deleteMany({ where: { userId } })
+  await prisma.transfer.deleteMany({ where: { userId } })
+  await prisma.financialReceipt.deleteMany({ where: { userId } })
+  await prisma.account.deleteMany({ where: { userId } })
   await prisma.user.delete({ where: { id: userId } })
   return {
     rules: rules.count,
@@ -494,6 +500,25 @@ async function seedAccount(db, user, startDate, day) {
       userId: user.id,
       clientId: 'seed-budget-' + index
     }))
+  })
+  const main = await db.account.create({
+    data: { id: `main-${user.id}`, userId: user.id, name: 'Main', isMain: true }
+  })
+  const cash = await db.account.create({
+    data: { id: `seed-cash-${user.id}`, userId: user.id, name: 'Cash', openingBalance: 15000 }
+  })
+  await db.transaction.updateMany({ where: { userId: user.id }, data: { accountId: main.id } })
+  await db.recurringRule.updateMany({ where: { userId: user.id }, data: { accountId: main.id } })
+  await db.transfer.create({
+    data: {
+      id: `seed-transfer-${user.id}`,
+      userId: user.id,
+      sourceId: main.id,
+      destinationId: cash.id,
+      amount: 5000,
+      date: day,
+      comment: 'Cash withdrawal'
+    }
   })
   return {
     transactions: transactions.length,

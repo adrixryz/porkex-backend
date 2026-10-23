@@ -9,6 +9,7 @@ const localDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.get
 await withServer('future-dates', async ({ call, check, state }) => {
   let r = await call('POST', '/auth/register', { name: 'F', email: 'f@f.com', password: 'secret1' })
   state.token = r.data.token
+  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
   const cats = (await call('GET', '/api/categories')).data
   const expense = cats.find(c => c.type === 'EXPENSE')
   const income = cats.find(c => c.type === 'INCOME')
@@ -140,7 +141,7 @@ await withServer('future-dates', async ({ call, check, state }) => {
   const expected = 100 - 40 - 30
   check(
     'el dashboard cuadra con la analitica',
-    Math.abs(r.data.globalBalance - expected) < 0.01,
+    Math.abs(r.data.globalBalance - 1000000 - expected) < 0.01,
     `globalBalance=${r.data.globalBalance} (esperado ${expected})`
   )
   check(

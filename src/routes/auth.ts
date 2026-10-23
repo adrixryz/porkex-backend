@@ -81,6 +81,10 @@ router.post('/register', async (req, res) => {
       data: { name: cleanName, email: cleanEmail, password: hashedPassword }
     })
 
+    await prisma.account.create({
+      data: { id: `main-${user.id}`, userId: user.id, name: 'Main', isMain: true }
+    })
+
     // A failing seed must not block registration (avoids orphaned users without a token).
     try {
       await seedCategoriesForUser(user.id)

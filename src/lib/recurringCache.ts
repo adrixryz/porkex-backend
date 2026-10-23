@@ -1,6 +1,6 @@
 import { dayKey } from './dates'
 
-export type RecurringResult = { created: number; state: 'ready' | 'pending' }
+export type RecurringResult = { created: number; state: 'ready' | 'pending' | 'blocked' }
 
 /** Cache only settled schedules; invalidation also separates work already in flight. */
 export function createRecurringCache(

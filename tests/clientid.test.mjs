@@ -12,6 +12,7 @@ await withServer('clientid', async ({ call, check, state }) => {
   })
   check('registro', r.status === 201, JSON.stringify(r.data).slice(0, 60))
   state.token = r.data.token
+  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
 
   const cats = (await call('GET', '/api/categories')).data
   const food = cats.find(c => c.name === 'Food')

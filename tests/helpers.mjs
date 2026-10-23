@@ -176,6 +176,12 @@ export async function createTestUser(ctx, email = 'test@example.com') {
   if (res.status !== 201)
     throw new Error(`Could not create the test user: ${JSON.stringify(res.data)}`)
   ctx.state.token = res.data.token
+  if (email !== 'unfunded@example.com') {
+    const funded = await ctx.call('PUT', `/api/accounts/main-${res.data.user.id}`, {
+      openingBalance: 1000000
+    })
+    if (funded.status !== 200) throw new Error('Could not fund the legacy domain fixture.')
+  }
   const cats = await ctx.call('GET', '/api/categories')
   return {
     user: res.data.user,

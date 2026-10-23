@@ -18,6 +18,7 @@ const endOfWeek = () => {
 await withServer('reassign', async ({ call, check, state }) => {
   let r = await call('POST', '/auth/register', { name: 'T', email: 'r@r.com', password: 'secret1' })
   state.token = r.data.token
+  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
   const seed = (await call('GET', '/api/categories')).data
   const target = seed.find(c => c.name === 'Food') // se usara como destino
 
