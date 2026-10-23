@@ -58,7 +58,7 @@ await withServer('currency', async ({ call, check, state }) => {
 
   r = await call('PUT', '/api/profile', { currency: 'EUR' })
   check(
-    'los 7 codigos del front son validos',
+    'los 6 codigos del front son validos',
     r.status === 200 && r.data.currency === 'EUR',
     r.data?.error || r.data.currency
   )

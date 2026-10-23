@@ -162,20 +162,44 @@ try {
     )
   }
 
-  const reader = new PrismaClient({ adapter: new PrismaLibSQL(createClient({ url: `file:${join(temporary, 'test-2.db').replace(/\\/g, '/')}` })) })
+  const reader = new PrismaClient({
+    adapter: new PrismaLibSQL(
+      createClient({ url: `file:${join(temporary, 'test-2.db').replace(/\\/g, '/')}` })
+    )
+  })
   try {
-    const rows = await reader.transaction.findMany({ where: { date: { gte: new Date('2026-01-01T00:00:00Z'), lte: new Date('2026-02-01T00:00:00Z') } } })
+    const rows = await reader.transaction.findMany({
+      where: {
+        date: { gte: new Date('2026-01-01T00:00:00Z'), lte: new Date('2026-02-01T00:00:00Z') }
+      }
+    })
     assert.equal(rows.length, 2)
     assert.equal(rows.find(row => row.id === 2).date.toISOString(), '2026-02-01T00:00:00.000Z')
-  } finally { await reader.$disconnect() }
+  } finally {
+    await reader.$disconnect()
+  }
 
   const invalidDates = await memory(baseline)
   await seed(invalidDates)
   await invalidDates.execute(`UPDATE "Transaction" SET date='2026-02-31T00:00:00Z' WHERE id=1`)
   await assert.rejects(runMigrations(invalidDates, migrations), /CHECK constraint/)
-  assert.equal((await invalidDates.execute('SELECT date FROM "Transaction" WHERE id=1')).rows[0].date, '2026-02-31T00:00:00Z')
-  assert.equal((await invalidDates.execute(`SELECT name FROM sqlite_master WHERE name='_PorkexMigration'`)).rows.length, 0)
-  assert.equal((await legacy.execute(`SELECT COUNT(*) AS n FROM "Transaction" WHERE date >= '2026-01-01T00:00:00+00:00' AND date <= '2026-02-01T00:00:00+00:00'`)).rows[0].n, 2n)
+  assert.equal(
+    (await invalidDates.execute('SELECT date FROM "Transaction" WHERE id=1')).rows[0].date,
+    '2026-02-31T00:00:00Z'
+  )
+  assert.equal(
+    (await invalidDates.execute(`SELECT name FROM sqlite_master WHERE name='_PorkexMigration'`))
+      .rows.length,
+    0
+  )
+  assert.equal(
+    (
+      await legacy.execute(
+        `SELECT COUNT(*) AS n FROM "Transaction" WHERE date >= '2026-01-01T00:00:00+00:00' AND date <= '2026-02-01T00:00:00+00:00'`
+      )
+    ).rows[0].n,
+    2n
+  )
 
   const postMigrationDrift = await memory()
   await runMigrations(postMigrationDrift, migrations)

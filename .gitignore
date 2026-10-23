@@ -1,19 +1,11 @@
-# Dependencies
 node_modules
-
-# Build output
 dist
-
-# Environment
 .env
 .env.*
 !.env.example
-
-# Local database (and manual backups)
+/AGENTS.md
 prisma/*.db
 prisma/*.db-journal
 prisma/backups/
-
-# Logs
 *.log
 npm-debug.log*
