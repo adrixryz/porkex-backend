@@ -114,6 +114,8 @@ CREATE UNIQUE INDEX "Transaction_recurringId_date_key" ON "Transaction"("recurri
 
 
 CREATE TABLE "Account" (
+  "isGoal" BOOLEAN NOT NULL DEFAULT false,
+  "targetAmount" INTEGER,
   "id" TEXT NOT NULL PRIMARY KEY,
   "userId" INTEGER NOT NULL,
   "name" TEXT NOT NULL,

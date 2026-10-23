@@ -16,17 +16,14 @@ const nameOf = (name: unknown) =>
     : null
 const failure = (res: import('express').Response, error: unknown) => {
   if (!(error instanceof FinanceError)) console.error('Financial operation failed.', error)
-  return res
-    .status(error instanceof FinanceError ? error.status : 500)
-    .json({
-      error:
-        error instanceof FinanceError ? error.message : 'Could not save the financial operation.'
-    })
+  return res.status(error instanceof FinanceError ? error.status : 500).json({
+    error: error instanceof FinanceError ? error.message : 'Could not save the financial operation.'
+  })
 }
 
 accountsRouter.get('/accounts', async (req: AuthRequest, res) => {
   try {
-    res.json(await accountList(req.userId!))
+    res.json((await accountList(req.userId!)).filter(a => !a.isGoal))
   } catch (e) {
     failure(res, e)
   }
@@ -65,7 +62,7 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
       validId(body.mutationId) ? `account:edit:${body.mutationId}` : null,
       async db => {
         const row = await db.account.findFirst({ where: { id, userId } })
-        if (!row) throw new FinanceError('Account not found.', 404)
+        if (!row || row.isGoal) throw new FinanceError('Account not found.', 404)
         const name = nameOf(body.name ?? row.name),
           openingBalance = toCentsNonNegative(body.openingBalance ?? fromCents(row.openingBalance))
         if (!name || openingBalance === null || (row.isMain && (name !== 'Main' || body.archived)))
@@ -165,6 +162,8 @@ for (const method of ['post', 'put', 'delete'] as const)
           const accounts = await db.account.findMany({
             where: { userId, archived: false, id: { in: [sourceId, destinationId] } }
           })
+          if (accounts.length === 2 && accounts.every(a => a.isGoal))
+            throw new FinanceError('Transfer savings through a normal account.')
           if (accounts.length !== 2) throw new FinanceError('Choose two active accounts.')
           const data = {
             userId,
@@ -186,6 +185,66 @@ for (const method of ['post', 'put', 'delete'] as const)
           return { ...row, amount: fromCents(row.amount) }
         })
         invalidateRecurring(userId)
+        res.status(method === 'post' ? 201 : 200).json(result)
+      } catch (e) {
+        failure(res, e)
+      }
+    }
+  )
+
+accountsRouter.get('/goals', async (req: AuthRequest, res) => {
+  try {
+    res.json((await accountList(req.userId!)).filter(a => a.isGoal && !a.archived))
+  } catch (e) {
+    failure(res, e)
+  }
+})
+for (const method of ['post', 'put', 'delete'] as const)
+  accountsRouter[method](
+    method === 'post' ? '/goals' : '/goals/:id',
+    async (req: AuthRequest, res) => {
+      try {
+        const userId = req.userId!,
+          body = req.body ?? {},
+          id = method === 'post' ? body.id : String(req.params.id)
+        if (!validId(id) || (method === 'put' && !validId(body.mutationId)))
+          throw new FinanceError('A stable operation ID is required.')
+        const result = await financialWrite(
+          userId,
+          `goal:${method}:${method === 'put' ? body.mutationId : id}`,
+          async db => {
+            const old = await db.account.findFirst({ where: { id, userId, isGoal: true } })
+            if (method !== 'post' && !old) throw new FinanceError('Goal not found.', 404)
+            if (method === 'delete') {
+              if ((await balance(userId, id, db)) !== 0)
+                throw new FinanceError(
+                  'Withdraw the remaining funds before removing the goal.',
+                  409
+                )
+              await db.account.update({ where: { id }, data: { archived: true } })
+              return { success: true }
+            }
+            if (old?.archived) throw new FinanceError('The goal is archived.', 409)
+            const name = nameOf(body.name),
+              targetAmount = toCents(body.targetAmount)
+            if (!name || targetAmount === null)
+              throw new FinanceError(
+                'Enter a goal name and positive target with up to two decimals.'
+              )
+            const row =
+              method === 'post'
+                ? await db.account.create({
+                    data: { id, userId, name, targetAmount, isGoal: true }
+                  })
+                : await db.account.update({ where: { id }, data: { name, targetAmount } })
+            return {
+              ...row,
+              targetAmount: fromCents(targetAmount),
+              openingBalance: 0,
+              balance: fromCents(await balance(userId, id, db))
+            }
+          }
+        )
         res.status(method === 'post' ? 201 : 200).json(result)
       } catch (e) {
         failure(res, e)

@@ -217,6 +217,8 @@ model OccurrenceTag {
 }
 
 model Account {
+  isGoal         Boolean         @default(false)
+  targetAmount   Int?
   id             String          @id
   userId         Int
   user           User            @relation(fields: [userId], references: [id])

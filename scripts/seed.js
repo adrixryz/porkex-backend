@@ -504,6 +504,26 @@ async function seedAccount(db, user, startDate, day) {
   const main = await db.account.create({
     data: { id: `main-${user.id}`, userId: user.id, name: 'Main', isMain: true }
   })
+  const goal = await db.account.create({
+    data: {
+      id: `seed-goal-${user.id}`,
+      userId: user.id,
+      name: 'Vacation',
+      isGoal: true,
+      targetAmount: 80000
+    }
+  })
+  await db.transfer.create({
+    data: {
+      id: `seed-goal-transfer-${user.id}`,
+      userId: user.id,
+      sourceId: main.id,
+      destinationId: goal.id,
+      amount: 20000,
+      date: day,
+      comment: 'Vacation savings'
+    }
+  })
   const cash = await db.account.create({
     data: { id: `seed-cash-${user.id}`, userId: user.id, name: 'Cash', openingBalance: 15000 }
   })

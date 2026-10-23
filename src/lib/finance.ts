@@ -26,7 +26,8 @@ export async function movementAccount(
     id === undefined || id === null
       ? await mainAccount(userId, db)
       : await db.account.findFirst({ where: { id: String(id), userId, archived: false } })
-  if (!account || account.archived) throw new FinanceError('Choose an active account.')
+  if (!account || account.archived || account.isGoal)
+    throw new FinanceError('Choose an active account.')
   return account
 }
 export async function balance(userId: number, id: string, db: Prisma.TransactionClient = prisma) {
@@ -74,6 +75,7 @@ export async function accountList(userId: number, db: Prisma.TransactionClient =
   return Promise.all(
     accounts.map(async account => ({
       ...account,
+      targetAmount: account.targetAmount === null ? null : fromCents(account.targetAmount),
       openingBalance: fromCents(account.openingBalance),
       balance: fromCents(await balance(userId, account.id, db))
     }))
