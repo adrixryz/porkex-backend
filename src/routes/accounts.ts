@@ -8,6 +8,53 @@ import { parseDay } from '../lib/dates'
 import { invalidateRecurring } from '../lib/recurring'
 
 export const accountsRouter = Router()
+
+accountsRouter.get('/dashboard/summary', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!,
+      accountId = req.query.accountId
+    if (accountId !== undefined && !validId(accountId))
+      throw new FinanceError('Invalid account ID.')
+    const result = await prisma.$transaction(async db => {
+      const account = accountId
+        ? await db.account.findFirst({
+            where: { id: String(accountId), userId, archived: false, isGoal: false }
+          })
+        : null
+      if (accountId && !account) throw new FinanceError('Choose an active account.', 404)
+      const where = {
+        userId,
+        ...(account
+          ? account.isMain
+            ? { OR: [{ accountId: account.id }, { accountId: null }] }
+            : { accountId: account.id }
+          : {})
+      }
+      const [income, expense, count] = await Promise.all([
+        db.transaction.aggregate({ where: { ...where, type: 'INCOME' }, _sum: { amount: true } }),
+        db.transaction.aggregate({ where: { ...where, type: 'EXPENSE' }, _sum: { amount: true } }),
+        db.transaction.count({ where })
+      ])
+      const totalIncome = income._sum.amount || 0,
+        totalExpense = expense._sum.amount || 0
+      const funds = account
+        ? await balance(userId, account.id, db)
+        : totalIncome -
+          totalExpense +
+          ((await db.account.aggregate({ where: { userId }, _sum: { openingBalance: true } }))._sum
+            .openingBalance || 0)
+      return {
+        globalBalance: fromCents(funds),
+        totalIncome: fromCents(totalIncome),
+        totalExpense: fromCents(totalExpense),
+        transactionCount: count
+      }
+    })
+    res.json(result)
+  } catch (e) {
+    failure(res, e)
+  }
+})
 const validId = (id: unknown): id is string =>
   typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id)
 const nameOf = (name: unknown) =>
