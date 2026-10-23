@@ -30,6 +30,15 @@ for (const [zone, day, instants] of [
   const user = await prisma.user.create({
     data: { name: 'Clock', email: `${zone}-${day}@example.com`, password: 'unused' }
   })
+  await prisma.account.create({
+    data: {
+      id: `main-${user.id}`,
+      userId: user.id,
+      name: 'Main',
+      isMain: true,
+      openingBalance: 1000000
+    }
+  })
   const category = await prisma.category.create({
     data: { name: 'Clock', type: 'EXPENSE', userId: user.id }
   })

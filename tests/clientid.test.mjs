@@ -81,6 +81,7 @@ await withServer('clientid', async ({ call, check, state }) => {
   // ── ownership: another user cannot claim or read someone else's id ──
   r = await call('POST', '/auth/register', { name: 'Otro', email: 'o@o.com', password: 'secret1' })
   state.token = r.data.token
+  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000 })
 
   const otherCats = (await call('GET', '/api/categories')).data
   const otherFood = otherCats.find(c => c.name === 'Food')

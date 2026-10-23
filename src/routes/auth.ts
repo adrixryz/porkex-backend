@@ -77,12 +77,14 @@ router.post('/register', async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10)
-    const user = await prisma.user.create({
-      data: { name: cleanName, email: cleanEmail, password: hashedPassword }
-    })
-
-    await prisma.account.create({
-      data: { id: `main-${user.id}`, userId: user.id, name: 'Main', isMain: true }
+    const user = await prisma.$transaction(async db => {
+      const user = await db.user.create({
+        data: { name: cleanName, email: cleanEmail, password: hashedPassword }
+      })
+      await db.account.create({
+        data: { id: `main-${user.id}`, userId: user.id, name: 'Main', isMain: true }
+      })
+      return user
     })
 
     // A failing seed must not block registration (avoids orphaned users without a token).

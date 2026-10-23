@@ -61,5 +61,47 @@ await withServer('accounts', async ctx => {
   )
   await call('PUT', `/accounts/${main}`, { archived: true }, 400)
   await call('POST', '/transfers', { ...transfer, id: randomUUID(), amount: 1 }, 409)
+  await call('PUT', `/accounts/${destinationId}`, { archived: true, openingBalance: 1 }, 409)
+  assert.equal((await call('GET', '/accounts')).find(a => a.id === destinationId).archived, false)
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' })
+  const rule = await call(
+    'POST',
+    '/recurring',
+    {
+      clientId: randomUUID(),
+      accountId: main,
+      amount: 10,
+      type: 'EXPENSE',
+      categoryId: expense.id,
+      description: 'Blocked expense',
+      startDate: today,
+      frequency: 'DAY',
+      interval: 1
+    },
+    201
+  )
+  assert.equal(
+    rule.nextDate.slice(0, 10),
+    today,
+    'Insufficient funds must not advance the occurrence'
+  )
+  const blocked = await ctx.call('GET', '/api/dashboard')
+  assert.equal(blocked.headers.get('x-porkex-recurring-state'), 'blocked')
+  await call('POST', '/transactions', movement('INCOME', 100, income.id), 201)
+  await call('GET', '/dashboard')
+  const rules = await call('GET', '/recurring')
+  assert(rules.find(r => r.id === rule.id).nextDate.slice(0, 10) > today)
+  assert.equal((await call('GET', '/accounts')).find(a => a.id === main).balance, 90)
+  const racing = await Promise.all(
+    [1, 2].map(() =>
+      ctx.call('POST', '/api/transfers', { ...transfer, id: randomUUID(), amount: 80 })
+    )
+  )
+  assert.deepEqual(
+    racing.map(r => r.status).sort(),
+    [201, 409],
+    'Concurrent debits cannot overdraw funds'
+  )
+  assert.equal((await call('GET', '/accounts')).find(a => a.id === main).balance, 10)
   ctx.check('Account funds, transfers, rollback and durable replay protection', true)
 })

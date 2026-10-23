@@ -11,6 +11,8 @@ export class FinanceError extends Error {
   }
 }
 export async function mainAccount(userId: number, db: Prisma.TransactionClient = prisma) {
+  const existing = await db.account.findUnique({ where: { id: `main-${userId}` } })
+  if (existing) return existing
   return db.account.upsert({
     where: { id: `main-${userId}` },
     create: { id: `main-${userId}`, userId, name: 'Main', isMain: true },
@@ -59,7 +61,11 @@ export async function requireFunds(
 ) {
   for (const id of new Set(ids)) {
     const actual = id ?? (await mainAccount(userId, db)).id
-    if ((await balance(userId, actual, db)) < 0)
+    const funds = await balance(userId, actual, db)
+    const account = await db.account.findUnique({ where: { id: actual } })
+    if (account?.archived && funds !== 0)
+      throw new FinanceError('Restore the archived account before changing its balance.', 409)
+    if (funds < 0)
       throw new FinanceError(
         'Insufficient funds. This change would leave an account with a negative balance.',
         409

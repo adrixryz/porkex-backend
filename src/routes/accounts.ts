@@ -70,7 +70,9 @@ const failure = (res: import('express').Response, error: unknown) => {
 
 accountsRouter.get('/accounts', async (req: AuthRequest, res) => {
   try {
-    res.json((await accountList(req.userId!)).filter(a => !a.isGoal))
+    res.json(
+      (await accountList(req.userId!)).filter(a => req.query.includeGoals === 'true' || !a.isGoal)
+    )
   } catch (e) {
     failure(res, e)
   }
@@ -114,15 +116,6 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
           openingBalance = toCentsNonNegative(body.openingBalance ?? fromCents(row.openingBalance))
         if (!name || openingBalance === null || (row.isMain && (name !== 'Main' || body.archived)))
           throw new FinanceError('Main must remain available. Enter valid account details.')
-        if (
-          body.archived &&
-          ((await balance(userId, id, db)) !== 0 ||
-            (await db.recurringRule.count({ where: { userId, accountId: id, active: true } })))
-        )
-          throw new FinanceError(
-            'Empty the account and pause its recurring rules before archiving.',
-            409
-          )
         await db.account.update({
           where: { id },
           data: {
@@ -131,6 +124,15 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
             archived: typeof body.archived === 'boolean' ? body.archived : row.archived
           }
         })
+        if (
+          (typeof body.archived === 'boolean' ? body.archived : row.archived) &&
+          ((await balance(userId, id, db)) !== 0 ||
+            (await db.recurringRule.count({ where: { userId, accountId: id, active: true } })))
+        )
+          throw new FinanceError(
+            'Empty the account and pause its recurring rules before archiving.',
+            409
+          )
         await requireFunds(userId, [id], db)
         return { success: true }
       }

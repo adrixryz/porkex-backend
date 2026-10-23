@@ -161,3 +161,7 @@ CREATE TABLE "Favorite" (
   CONSTRAINT "Favorite_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 CREATE INDEX "Favorite_userId_createdAt_idx" ON "Favorite"("userId", "createdAt");
+
+CREATE INDEX "Transaction_userId_accountId_idx" ON "Transaction"("userId", "accountId");
+CREATE INDEX "Transfer_userId_sourceId_idx" ON "Transfer"("userId", "sourceId");
+CREATE INDEX "Transfer_userId_destinationId_idx" ON "Transfer"("userId", "destinationId");

@@ -49,8 +49,6 @@ async function catchUp(req: AuthRequest, res: import('express').Response, refres
     const result = await runDueRules(req.userId!, new Date(), res.locals.timeZone)
     res.setHeader('X-Porkex-Recurring-State', result.state)
   } catch (error) {
-    if (error instanceof FinanceError)
-      return res.status(error.status).json({ error: error.message })
     res.setHeader('X-Porkex-Recurring-State', 'failed')
     console.error('Recurring catch-up failed.', error)
   }
@@ -815,7 +813,12 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
         ) {
           return { tx: existing, syncStatus: 'superseded' }
         }
-        const v = await validateTransactionInput(userId, req.body, db, res.locals.today)
+        const v = await validateTransactionInput(
+          userId,
+          { ...req.body, accountId: req.body.accountId ?? existing.accountId },
+          db,
+          res.locals.today
+        )
         if (v.error) return { status: 400, error: v.error }
         const tx = await db.transaction.update({
           where: { id: txId },

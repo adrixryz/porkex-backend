@@ -156,6 +156,7 @@ model Transaction {
   // two racing requests — can never materialize the same date twice.
   @@unique([recurringId, date])
   @@index([userId, date])
+  @@index([userId, accountId])
   @@index([categoryId])
 }
 
@@ -249,6 +250,8 @@ model Transfer {
   createdAt     DateTime @default(now())
 
   @@index([userId, date])
+  @@index([userId, sourceId])
+  @@index([userId, destinationId])
 }
 
 model FinancialReceipt {

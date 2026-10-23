@@ -9,9 +9,14 @@ await withServer('limits', async ({ call, check, state }) => {
     password: 'secret1'
   })
   state.token = r.data.token
-  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
+  await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 10000000 })
   const cats = (await call('GET', '/api/categories')).data
   const expense = cats.find(c => c.type === 'EXPENSE')
+  await call('POST', '/api/transactions', {
+    amount: 10,
+    type: 'INCOME',
+    categoryId: cats.find(c => c.type === 'INCOME').id
+  })
 
   // ── transactions ──
   r = await call('POST', '/api/transactions', {
