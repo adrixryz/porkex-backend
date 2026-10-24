@@ -92,7 +92,19 @@ accountsRouter.post('/accounts', async (req: AuthRequest, res) => {
       return {
         ...row,
         openingBalance: fromCents(openingBalance),
-        balance: fromCents(openingBalance)
+        balance: fromCents(openingBalance),
+        ...(openingBalance > 0
+          ? {
+              balanceAdjustment: {
+                kind: 'opening-balance',
+                accountId: id,
+                accountName: name,
+                previousBalance: 0,
+                balance: fromCents(openingBalance),
+                date: new Date().toISOString()
+              }
+            }
+          : {})
       }
     })
     invalidateRecurring(userId)
@@ -108,12 +120,26 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
       body = req.body ?? {}
     const result = await financialWrite(
       userId,
-      validId(body.mutationId) ? `account:edit:${body.mutationId}` : null,
+      `account:edit:${validId(body.mutationId) ? body.mutationId : randomUUID()}`,
       async db => {
         const row = await db.account.findFirst({ where: { id, userId } })
         if (!row || row.isGoal) throw new FinanceError('Account not found.', 404)
-        const name = nameOf(body.name ?? row.name),
-          openingBalance = toCentsNonNegative(body.openingBalance ?? fromCents(row.openingBalance))
+        const name = nameOf(body.name ?? row.name)
+        const previousBalance = await balance(userId, id, db)
+        let openingBalance = row.openingBalance
+        if (body.balance !== undefined) {
+          const desiredBalance = toCentsNonNegative(body.balance)
+          if (desiredBalance === null || body.openingBalance !== undefined)
+            throw new FinanceError('Enter a valid current balance with up to two decimals.')
+          openingBalance += desiredBalance - previousBalance
+        } else if (body.openingBalance !== undefined) {
+          const parsed = toCentsNonNegative(body.openingBalance)
+          if (parsed === null) throw new FinanceError('Enter a valid opening balance.')
+          openingBalance = parsed
+        }
+        // Balance corrections can require a negative baseline, but never negative funds.
+        if (!Number.isSafeInteger(openingBalance) || Math.abs(openingBalance) > 2_147_483_647)
+          throw new FinanceError('This balance adjustment exceeds the supported range.')
         if (!name || openingBalance === null || (row.isMain && (name !== 'Main' || body.archived)))
           throw new FinanceError('Main must remain available. Enter valid account details.')
         await db.account.update({
@@ -134,11 +160,196 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
             409
           )
         await requireFunds(userId, [id], db)
-        return { success: true }
+        const currentBalance = await balance(userId, id, db)
+        return {
+          success: true,
+          ...(currentBalance !== previousBalance
+            ? {
+                balanceAdjustment: {
+                  accountId: id,
+                  accountName: name,
+                  previousBalance: fromCents(previousBalance),
+                  balance: fromCents(currentBalance),
+                  date: new Date().toISOString()
+                }
+              }
+            : {})
+        }
       }
     )
     invalidateRecurring(userId)
     res.json(result)
+  } catch (e) {
+    failure(res, e)
+  }
+})
+accountsRouter.delete('/accounts/:id', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!
+    const id = String(req.params.id)
+    if (!validId(id)) throw new FinanceError('Invalid account ID.')
+    const result = await financialWrite(userId, `account:delete:${id}`, async db => {
+      const row = await db.account.findFirst({ where: { id, userId, isGoal: false } })
+      if (!row) throw new FinanceError('Account not found.', 404)
+      if (row.isMain) throw new FinanceError('Main must remain available.')
+      if (!row.archived || (await balance(userId, id, db)) !== 0)
+        throw new FinanceError('Archive the account with a zero balance before deleting it.', 409)
+      const references = await Promise.all([
+        db.transaction.count({ where: { userId, accountId: id } }),
+        db.transfer.count({ where: { userId, OR: [{ sourceId: id }, { destinationId: id }] } }),
+        db.budget.count({ where: { userId, accountId: id } }),
+        db.recurringRule.count({ where: { userId, accountId: id } }),
+        db.favorite.count({ where: { userId, accountId: id } })
+      ])
+      if (references.some(count => count > 0))
+        throw new FinanceError(
+          'This account still has financial history or linked records. Keep it archived to preserve them.',
+          409
+        )
+      await db.account.delete({ where: { id } })
+      return { success: true }
+    })
+    invalidateRecurring(userId)
+    res.json(result)
+  } catch (e) {
+    failure(res, e)
+  }
+})
+// Receipt events share one timeline with transfers, ordered by creation instant.
+async function accountBalanceEntries(userId: number, accountId?: string) {
+  const receipts = await prisma.financialReceipt.findMany({
+    where: {
+      userId,
+      OR: [{ key: { startsWith: 'account:edit:' } }, { key: { startsWith: 'account:create:' } }]
+    }
+  })
+  return receipts.flatMap(receipt => {
+    const entry = JSON.parse(receipt.response).balanceAdjustment as
+      | {
+          accountId: string
+          accountName: string
+          previousBalance: number
+          balance: number
+          date: string
+          kind?: 'opening-balance'
+        }
+      | undefined
+    return entry && (!accountId || entry.accountId === accountId)
+      ? [
+          {
+            ...entry,
+            id: receipt.key,
+            kind: entry.kind ?? ('balance-adjustment' as const),
+            createdAt: entry.date
+          }
+        ]
+      : []
+  })
+}
+accountsRouter.get('/accounts/balance-adjustments', async (req: AuthRequest, res) => {
+  try {
+    const accountId = typeof req.query.accountId === 'string' ? req.query.accountId : undefined
+    const rows = (await accountBalanceEntries(req.userId!, accountId)).sort(
+      (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
+    )
+    const totalPages = Math.max(1, Math.ceil(rows.length / 15))
+    const page = Math.min(totalPages, Math.max(1, Math.floor(Number(req.query.page) || 1)))
+    res.json({ items: rows.slice((page - 1) * 15, page * 15), page, totalPages })
+  } catch (e) {
+    failure(res, e)
+  }
+})
+for (const method of ['put', 'delete'] as const)
+  accountsRouter[method]('/accounts/balance-adjustments/:id', async (req: AuthRequest, res) => {
+    try {
+      const userId = req.userId!
+      const id = String(req.params.id)
+      const body = req.body ?? {}
+      if (
+        !/^account:(create|edit):[A-Za-z0-9_-]{1,64}$/.test(id) ||
+        (method === 'put' && !validId(body.mutationId))
+      )
+        throw new FinanceError('A valid adjustment and stable operation ID are required.')
+      const result = await financialWrite(
+        userId,
+        `adjustment:${method}:${method === 'put' ? body.mutationId : id}`,
+        async db => {
+          const receipt = await db.financialReceipt.findUnique({
+            where: { userId_key: { userId, key: id } }
+          })
+          if (!receipt) throw new FinanceError('Balance adjustment not found.', 404)
+          const original = JSON.parse(receipt.response)
+          const entry = original.balanceAdjustment as
+            { accountId: string; previousBalance: number; balance: number } | undefined
+          if (!entry) throw new FinanceError('Balance adjustment not found.', 404)
+          const account = await db.account.findFirst({
+            where: { userId, id: entry.accountId, isGoal: false }
+          })
+          if (method === 'put' && !account)
+            throw new FinanceError('The account no longer exists.', 404)
+          const desired = method === 'put' ? toCentsNonNegative(body.balance) : null
+          if (method === 'put' && desired === null)
+            throw new FinanceError('Enter a valid nonnegative balance.')
+          const oldBalance = Math.round(entry.balance * 100)
+          const previousBalance = Math.round(entry.previousBalance * 100)
+          const delta = method === 'put' ? desired! - oldBalance : previousBalance - oldBalance
+          if (account) {
+            const openingBalance = account.openingBalance + delta
+            if (!Number.isSafeInteger(openingBalance) || Math.abs(openingBalance) > 2_147_483_647)
+              throw new FinanceError('This adjustment exceeds the supported range.')
+            await db.account.update({ where: { id: account.id }, data: { openingBalance } })
+            await requireFunds(userId, [account.id], db)
+          }
+          original.balanceAdjustment =
+            method === 'delete' ? null : { ...entry, balance: fromCents(desired!) }
+          await db.financialReceipt.update({
+            where: { userId_key: { userId, key: id } },
+            data: { response: JSON.stringify(original) }
+          })
+          return { success: true }
+        }
+      )
+      invalidateRecurring(userId)
+      res.json(result)
+    } catch (e) {
+      failure(res, e)
+    }
+  })
+accountsRouter.get('/accounts/movements', async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId!
+    const accountId = typeof req.query.accountId === 'string' ? req.query.accountId : undefined
+    const [adjustments, transfers] = await Promise.all([
+      accountBalanceEntries(userId, accountId),
+      prisma.transfer.findMany({
+        where: {
+          userId,
+          ...(accountId
+            ? {
+                OR: [{ sourceId: accountId }, { destinationId: accountId }]
+              }
+            : {})
+        },
+        include: { source: true, destination: true }
+      })
+    ])
+    const items = [
+      ...adjustments,
+      ...transfers.map(row => ({
+        ...row,
+        kind: 'transfer' as const,
+        amount: fromCents(row.amount),
+        createdAt: row.createdAt.toISOString()
+      }))
+    ].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+    const totalPages = Math.max(1, Math.ceil(items.length / 15))
+    const page = Math.min(totalPages, Math.max(1, Math.floor(Number(req.query.page) || 1)))
+    res.json({
+      items: items.slice((page - 1) * 15, page * 15),
+      total: items.length,
+      page,
+      totalPages
+    })
   } catch (e) {
     failure(res, e)
   }
@@ -158,7 +369,7 @@ accountsRouter.get('/transfers', async (req: AuthRequest, res) => {
     const rows = await prisma.transfer.findMany({
       where,
       include: { source: true, destination: true },
-      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
       skip: (page - 1) * perPage,
       take: perPage
     })
@@ -188,9 +399,35 @@ for (const method of ['post', 'put', 'delete'] as const)
         const result = await financialWrite(userId, key, async db => {
           const old = await db.transfer.findFirst({ where: { id, userId } })
           if (method !== 'post' && !old) throw new FinanceError('Transfer not found.', 404)
+          const affectedGoals = await db.account.findMany({
+            where: {
+              userId,
+              isGoal: true,
+              id: {
+                in: [old?.sourceId, old?.destinationId, body.sourceId, body.destinationId].filter(
+                  (value): value is string => typeof value === 'string'
+                )
+              }
+            }
+          })
+          const previousFunds = new Map(
+            await Promise.all(
+              affectedGoals.map(
+                async goal => [goal.id, await balance(userId, goal.id, db)] as const
+              )
+            )
+          )
+          const checkGoalTargets = async () => {
+            for (const goal of affectedGoals) {
+              const current = await balance(userId, goal.id, db)
+              if (current > (goal.targetAmount ?? 0) && current > previousFunds.get(goal.id)!)
+                throw new FinanceError('This transfer would exceed the savings goal target.', 409)
+            }
+          }
           if (method === 'delete') {
             await db.transfer.delete({ where: { id } })
             await requireFunds(userId, [old!.sourceId, old!.destinationId], db)
+            await checkGoalTargets()
             return { success: true }
           }
           const sourceId = String(body.sourceId ?? ''),
@@ -231,6 +468,7 @@ for (const method of ['post', 'put', 'delete'] as const)
             [sourceId, destinationId, ...(old ? [old.sourceId, old.destinationId] : [])],
             db
           )
+          await checkGoalTargets()
           return { ...row, amount: fromCents(row.amount) }
         })
         invalidateRecurring(userId)
@@ -279,6 +517,11 @@ for (const method of ['post', 'put', 'delete'] as const)
             if (!name || targetAmount === null)
               throw new FinanceError(
                 'Enter a goal name and positive target with up to two decimals.'
+              )
+            if (old && targetAmount < (await balance(userId, id, db)))
+              throw new FinanceError(
+                'The target cannot be lower than the amount already saved.',
+                409
               )
             const row =
               method === 'post'
