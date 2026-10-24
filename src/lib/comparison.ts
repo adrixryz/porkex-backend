@@ -116,7 +116,7 @@ export function compareMovements(
       isCurrent ? current : previous,
       isCurrent ? buckets[index].current : buckets[index].previous
     ]) {
-      if (row.type === 'INCOME') target.income += row.amount
+      if (row.type === 'Income') target.income += row.amount
       else target.expense += row.amount
       target.net = target.income - target.expense
       target.count++

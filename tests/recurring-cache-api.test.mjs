@@ -8,7 +8,7 @@ await withServer(
     const today = new Date().toISOString().slice(0, 10)
     const created = await ctx.call('POST', '/api/recurring', {
       amount: 17,
-      type: 'EXPENSE',
+      type: 'Expense',
       categoryId: expense.id,
       frequency: 'DAY',
       interval: 1,
@@ -20,7 +20,7 @@ await withServer(
     assert.equal(rows.data.items.filter(row => row.recurringId === created.data.id).length, 1)
     const updated = await ctx.call('PUT', `/api/recurring/${created.data.id}`, {
       amount: 19,
-      type: 'EXPENSE',
+      type: 'Expense',
       categoryId: expense.id,
       frequency: 'DAY',
       interval: 1,

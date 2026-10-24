@@ -40,8 +40,8 @@ export async function balance(userId: number, id: string, db: Prisma.Transaction
     ...(account.isMain ? { OR: [{ accountId: id }, { accountId: null }] } : { accountId: id })
   }
   const [income, expense, incoming, outgoing] = await Promise.all([
-    db.transaction.aggregate({ where: { ...where, type: 'INCOME' }, _sum: { amount: true } }),
-    db.transaction.aggregate({ where: { ...where, type: 'EXPENSE' }, _sum: { amount: true } }),
+    db.transaction.aggregate({ where: { ...where, type: 'Income' }, _sum: { amount: true } }),
+    db.transaction.aggregate({ where: { ...where, type: 'Expense' }, _sum: { amount: true } }),
     db.transfer.aggregate({ where: { userId, destinationId: id }, _sum: { amount: true } }),
     db.transfer.aggregate({ where: { userId, sourceId: id }, _sum: { amount: true } })
   ])

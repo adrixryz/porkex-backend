@@ -8,7 +8,7 @@ await withServer('reliability', async ctx => {
   const day = new Date().toISOString().slice(0, 10)
   const tx = {
     amount: 1,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'Validation',
     categoryId: expense.id,
     date: day
@@ -41,12 +41,12 @@ await withServer('reliability', async ctx => {
     'older client without timezone uses Lima',
     fallback.status === 200 && fallback.headers.get('X-Porkex-Recurring-State') === 'ready'
   )
-  const category = (await call('POST', '/api/categories', { name: 'Future rule', type: 'EXPENSE' }))
+  const category = (await call('POST', '/api/categories', { name: 'Future rule', type: 'Expense' }))
     .data
   const rule = (
     await call('POST', '/api/recurring', {
       amount: 1,
-      type: 'EXPENSE',
+      type: 'Expense',
       description: 'Future',
       categoryId: category.id,
       frequency: 'DAY',
@@ -56,7 +56,7 @@ await withServer('reliability', async ctx => {
   ).data
   check(
     'category type cannot contradict future recurring rule',
-    (await call('PUT', `/api/categories/${category.id}`, { name: category.name, type: 'INCOME' }))
+    (await call('PUT', `/api/categories/${category.id}`, { name: category.name, type: 'Income' }))
       .status === 409
   )
   const cli = (...args) => {

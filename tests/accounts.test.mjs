@@ -19,8 +19,8 @@ await withServer('accounts', async ctx => {
     categoryId,
     comment: ''
   })
-  await call('POST', '/transactions', movement('EXPENSE', 1, expense.id), 409)
-  const funding = await call('POST', '/transactions', movement('INCOME', 100, income.id), 201)
+  await call('POST', '/transactions', movement('Expense', 1, expense.id), 409)
+  const funding = await call('POST', '/transactions', movement('Income', 100, income.id), 201)
   const destinationId = randomUUID()
   await call('POST', '/accounts', { id: destinationId, name: 'Cash', openingBalance: 0 }, 201)
   const transfer = {
@@ -51,7 +51,7 @@ await withServer('accounts', async ctx => {
   await call(
     'POST',
     '/transactions',
-    { ...movement('INCOME', 100, income.id), clientId: funding.clientId },
+    { ...movement('Income', 100, income.id), clientId: funding.clientId },
     201
   )
   assert.equal(
@@ -71,7 +71,7 @@ await withServer('accounts', async ctx => {
       clientId: randomUUID(),
       accountId: main,
       amount: 10,
-      type: 'EXPENSE',
+      type: 'Expense',
       categoryId: expense.id,
       description: 'Blocked expense',
       startDate: today,
@@ -87,7 +87,7 @@ await withServer('accounts', async ctx => {
   )
   const blocked = await ctx.call('GET', '/api/dashboard')
   assert.equal(blocked.headers.get('x-porkex-recurring-state'), 'blocked')
-  await call('POST', '/transactions', movement('INCOME', 100, income.id), 201)
+  await call('POST', '/transactions', movement('Income', 100, income.id), 201)
   await call('GET', '/dashboard')
   const rules = await call('GET', '/recurring')
   assert(rules.find(r => r.id === rule.id).nextDate.slice(0, 10) > today)

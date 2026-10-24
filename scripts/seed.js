@@ -113,15 +113,15 @@ const CONFIG = {
 // Same categories the registration endpoint seeds, so the account looks like a
 // real one rather than a fixture.
 const CATEGORIES = [
-  { name: 'Salary', type: 'INCOME', color: '#34A853' },
-  { name: 'Freelance', type: 'INCOME', color: '#4285F4' },
-  { name: 'Sales', type: 'INCOME', color: '#A8C7FA' },
-  { name: 'Food', type: 'EXPENSE', color: '#EA4335' },
-  { name: 'Transport', type: 'EXPENSE', color: '#FBBC04' },
-  { name: 'Entertainment', type: 'EXPENSE', color: '#A142F4' },
-  { name: 'Housing', type: 'EXPENSE', color: '#5F6368' },
-  { name: 'Shopping', type: 'EXPENSE', color: '#E8710A' },
-  { name: 'Others', type: 'EXPENSE', color: '#78909C' }
+  { name: 'Salary', type: 'Income', color: '#34A853' },
+  { name: 'Freelance', type: 'Income', color: '#4285F4' },
+  { name: 'Sales', type: 'Income', color: '#A8C7FA' },
+  { name: 'Food', type: 'Expense', color: '#EA4335' },
+  { name: 'Transport', type: 'Expense', color: '#FBBC04' },
+  { name: 'Entertainment', type: 'Expense', color: '#A142F4' },
+  { name: 'Housing', type: 'Expense', color: '#5F6368' },
+  { name: 'Shopping', type: 'Expense', color: '#E8710A' },
+  { name: 'Others', type: 'Expense', color: '#78909C' }
 ]
 
 // A seeded generator, so the same command always produces the same data. That
@@ -274,7 +274,7 @@ function buildTransactions(categoriesByName, startDate, recurringIds, day) {
       rows.push({
         date,
         categoryId: categoriesByName.Food.id,
-        type: 'EXPENSE',
+        type: 'Expense',
         amount: 450 + offset * 25,
         description: 'Morning coffee'
       })
@@ -284,14 +284,14 @@ function buildTransactions(categoriesByName, startDate, recurringIds, day) {
   rows.push({
     date: day,
     categoryId: categoriesByName.Food.id,
-    type: 'EXPENSE',
+    type: 'Expense',
     amount: 1876,
     description: ''
   })
   rows.push({
     date: day,
     categoryId: categoriesByName.Sales.id,
-    type: 'INCOME',
+    type: 'Income',
     amount: 3250,
     description: ''
   })
@@ -456,7 +456,7 @@ async function seedAccount(db, user, startDate, day) {
   const weekly = (category, amount, description, date) => ({
     userId: user.id,
     categoryId: byName[category].id,
-    type: 'EXPENSE',
+    type: 'Expense',
     amount: toCents(amount),
     description,
     frequency: 'WEEK',
@@ -547,7 +547,7 @@ async function seedAccount(db, user, startDate, day) {
       id: `seed-favorite-${user.id}`,
       userId: user.id,
       name: 'Lunch',
-      type: 'EXPENSE',
+      type: 'Expense',
       amount: 1200,
       comment: 'Lunch',
       categoryId: byName.Food.id,
@@ -559,10 +559,10 @@ async function seedAccount(db, user, startDate, day) {
     tags: tags.length,
     links: links.length,
     earned: transactions
-      .filter(row => row.type === 'INCOME')
+      .filter(row => row.type === 'Income')
       .reduce((sum, row) => sum + row.amount, 0),
     spent: transactions
-      .filter(row => row.type === 'EXPENSE')
+      .filter(row => row.type === 'Expense')
       .reduce((sum, row) => sum + row.amount, 0)
   }
 }

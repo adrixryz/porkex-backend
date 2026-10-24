@@ -40,14 +40,14 @@ for (const [zone, day, instants] of [
     }
   })
   const category = await prisma.category.create({
-    data: { name: 'Clock', type: 'EXPENSE', userId: user.id }
+    data: { name: 'Clock', type: 'Expense', userId: user.id }
   })
   const rule = await prisma.recurringRule.create({
     data: {
       userId: user.id,
       categoryId: category.id,
       amount: 100,
-      type: 'EXPENSE',
+      type: 'Expense',
       description: 'Clock',
       frequency: 'DAY',
       startDate: new Date(`${day}T00:00:00Z`),

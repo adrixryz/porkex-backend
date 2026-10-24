@@ -8,13 +8,13 @@ await withServer('dashboard-accounts', async ctx => {
   await ctx.call('POST', '/api/accounts', { id: cash, name: 'Cash', openingBalance: 25 })
   await ctx.call('POST', '/api/transactions', {
     accountId: main,
-    type: 'INCOME',
+    type: 'Income',
     categoryId: income.id,
     amount: 100
   })
   await ctx.call('POST', '/api/transactions', {
     accountId: cash,
-    type: 'EXPENSE',
+    type: 'Expense',
     categoryId: expense.id,
     amount: 5
   })

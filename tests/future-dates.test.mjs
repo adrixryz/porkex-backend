@@ -11,8 +11,8 @@ await withServer('future-dates', async ({ call, check, state }) => {
   state.token = r.data.token
   await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
   const cats = (await call('GET', '/api/categories')).data
-  const expense = cats.find(c => c.type === 'EXPENSE')
-  const income = cats.find(c => c.type === 'INCOME')
+  const expense = cats.find(c => c.type === 'Expense')
+  const income = cats.find(c => c.type === 'Income')
 
   const today = new Date()
   const todayDay = localDay(today)
@@ -20,7 +20,7 @@ await withServer('future-dates', async ({ call, check, state }) => {
   // ── fechas futuras ──
   r = await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'hoy',
     categoryId: expense.id,
     date: todayDay
@@ -38,7 +38,7 @@ await withServer('future-dates', async ({ call, check, state }) => {
   in3days.setDate(in3days.getDate() + 3)
   r = await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'en 3 dias',
     categoryId: expense.id,
     date: localDay(in3days)
@@ -55,7 +55,7 @@ await withServer('future-dates', async ({ call, check, state }) => {
   const earlierToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12, 5)
   r = await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'hoy mediodia',
     categoryId: expense.id,
     date: earlierToday.toISOString()
@@ -69,7 +69,7 @@ await withServer('future-dates', async ({ call, check, state }) => {
 
   r = await call('PUT', '/api/transactions/1', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'hoy',
     categoryId: expense.id,
     date: todayDay
@@ -80,21 +80,21 @@ await withServer('future-dates', async ({ call, check, state }) => {
   const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 10)
   await call('POST', '/api/transactions', {
     amount: 100,
-    type: 'INCOME',
+    type: 'Income',
     description: 'sueldo viejo',
     categoryId: income.id,
     date: localDay(lastMonth)
   })
   await call('POST', '/api/transactions', {
     amount: 40,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'gasto viejo',
     categoryId: expense.id,
     date: localDay(lastMonth)
   })
   await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'gasto de hoy',
     categoryId: expense.id,
     date: todayDay

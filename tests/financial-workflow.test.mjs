@@ -24,7 +24,7 @@ try {
         clientId: 'workflow-movement',
         categoryId: expense.id,
         amount: '12.34',
-        type: 'EXPENSE',
+        type: 'Expense',
         tagIds: ['workflow-alias']
       },
       201
@@ -35,7 +35,7 @@ try {
       '/recurring',
       {
         clientId: 'workflow-rule',
-        type: 'EXPENSE',
+        type: 'Expense',
         categoryId: expense.id,
         amount: 10,
         frequency: 'MONTH',

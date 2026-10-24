@@ -6,12 +6,12 @@ await withServer('paging', async ({ call, check, state, base }) => {
   let r = await call('POST', '/auth/register', { name: 'P', email: 'p@p.com', password: 'secret1' })
   state.token = r.data.token
   await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 1000000 })
-  const expense = (await call('GET', '/api/categories')).data.find(c => c.type === 'EXPENSE')
+  const expense = (await call('GET', '/api/categories')).data.find(c => c.type === 'Expense')
 
   for (let i = 1; i <= 5; i++) {
     await call('POST', '/api/transactions', {
       amount: i * 10,
-      type: 'EXPENSE',
+      type: 'Expense',
       description: `item ${i}`,
       categoryId: expense.id
     })

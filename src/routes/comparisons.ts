@@ -21,7 +21,7 @@ comparisonsRouter.get('/category-comparison', async (req: AuthRequest, res, next
     const rows = await prisma.transaction.findMany({
       where: {
         userId: req.userId!,
-        type: 'EXPENSE',
+        type: 'Expense',
         OR: [
           { date: { gte: ranges.currentStart, lt: ranges.currentEnd } },
           { date: { gte: ranges.previousStart, lt: ranges.previousEnd } }

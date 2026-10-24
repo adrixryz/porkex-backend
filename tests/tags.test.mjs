@@ -15,7 +15,7 @@ await withServer('tags', async ctx => {
   assert.equal(alias.id, 'tag-0')
   assert.equal((await call('GET', '/tags')).length, 6)
   const body = {
-    type: 'EXPENSE',
+    type: 'Expense',
     amount: 10,
     categoryId: expense.id,
     clientId: 'movement',
@@ -45,7 +45,7 @@ await withServer('tags', async ctx => {
   assert.equal(dashboard.recentTransactions[0].tags[1].name, 'Renamed')
   // Older clients that omit tags preserve their associations.
   await call('PUT', '/transactions/' + movement.id, {
-    type: 'EXPENSE',
+    type: 'Expense',
     amount: 12,
     categoryId: expense.id,
     description: 'Legacy'

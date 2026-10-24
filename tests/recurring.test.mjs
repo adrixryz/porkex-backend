@@ -59,7 +59,7 @@ await withServer('recurring', async ctx => {
 
   const createRule = overrides =>
     call('POST', '/api/recurring', {
-      type: 'EXPENSE',
+      type: 'Expense',
       amount: 10,
       description: 'Rule',
       categoryId: expense.id,
@@ -103,13 +103,13 @@ await withServer('recurring', async ctx => {
     txs.length === 1 &&
       toISO(new Date(txs[0].date)) === todayISO &&
       txs[0].amount === 1200.5 &&
-      txs[0].type === 'EXPENSE' &&
+      txs[0].type === 'Expense' &&
       txs[0].categoryId === expense.id,
     JSON.stringify(txs[0] ?? null)
   )
 
   r = await createRule({
-    type: 'INCOME',
+    type: 'Income',
     amount: 50,
     description: 'Pay',
     categoryId: income.id,
@@ -120,7 +120,7 @@ await withServer('recurring', async ctx => {
     'regla de ingreso semanal: generada hoy y nextDate = +7 días',
     r.status === 201 &&
       txs.length === 1 &&
-      txs[0].type === 'INCOME' &&
+      txs[0].type === 'Income' &&
       toISO(new Date(r.data.nextDate)) === toISO(utcDay(7)),
     `next=${r.data.nextDate}`
   )
@@ -340,7 +340,7 @@ await withServer('recurring', async ctx => {
   check('otra cuenta: no materializa las reglas ajenas', countTx(weeklyId) === countBefore)
 
   // A rule owned by the second account, then probed as the first.
-  const otherExpense = (await call('GET', '/api/categories')).data.find(c => c.type === 'EXPENSE')
+  const otherExpense = (await call('GET', '/api/categories')).data.find(c => c.type === 'Expense')
   const otherRule = await createRule({
     description: 'Owned by other',
     categoryId: otherExpense.id
@@ -365,7 +365,7 @@ await withServer('recurring', async ctx => {
     ['intervalo 0', { interval: 0 }],
     ['intervalo 25', { interval: 25 }],
     ['fin antes del inicio', { endDate: toISO(utcDay(-1)) }],
-    ['categoría de otro tipo', { type: 'INCOME' }],
+    ['categoría de otro tipo', { type: 'Income' }],
     ['comentario no válido', { comment: true }],
     ['importe 0', { amount: 0 }],
     ['categoría inexistente', { categoryId: 999999 }]

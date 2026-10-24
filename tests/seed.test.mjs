@@ -22,7 +22,7 @@ await withServer('seed', async ctx => {
   await ctx.call('POST', '/api/tags', { id: 'keeper-tag', name: 'Keep' })
   await ctx.call('POST', '/api/transactions', {
     amount: 12.34,
-    type: 'EXPENSE',
+    type: 'Expense',
     categoryId: expense.id,
     tagIds: ['keeper-tag']
   })
@@ -88,7 +88,7 @@ await withServer('seed', async ctx => {
       midnight:rows.every(row=>row.date.toISOString().endsWith('T00:00:00.000Z')),
       wholeCents:rows.every(row=>Number.isInteger(row.amount)),
       maxTags:Math.max(...rows.map(row=>row.tags.length)),untagged:rows.some(row=>!row.tags.length),
-      blankIncome:rows.some(row=>row.type==='INCOME'&&!row.comment),blankExpense:rows.some(row=>row.type==='EXPENSE'&&!row.comment),
+      blankIncome:rows.some(row=>row.type==='Income'&&!row.comment),blankExpense:rows.some(row=>row.type==='Expense'&&!row.comment),
       rules,foreignKeys:foreignKeys.rows.length,
       digest:createHash('sha256').update(JSON.stringify({rows,rules,tags:user.tags.map(tag=>tag.name)})).digest('hex')}));
   `)

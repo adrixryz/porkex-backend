@@ -76,7 +76,7 @@ router.use('/tags', tagsRouter)
 router.use('/analytics', comparisonsRouter)
 router.use('/recurring', occurrencesRouter)
 
-type TxType = 'INCOME' | 'EXPENSE'
+type TxType = 'Income' | 'Expense'
 
 // The analytics window accepts any whole range within these bounds; the UI
 // offers the same limits as editable fields.
@@ -128,7 +128,7 @@ function isWeekDay(v: unknown): v is (typeof WEEK_DAYS)[number] {
 }
 
 function isValidType(v: unknown): v is TxType {
-  return v === 'INCOME' || v === 'EXPENSE'
+  return v === 'Income' || v === 'Expense'
 }
 
 function parseCategoryId(v: unknown): number | null {
@@ -229,11 +229,11 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
     const [incomeSum, expenseSum, transactionCount] = await Promise.all([
       prisma.transaction.aggregate({
         _sum: { amount: true },
-        where: { type: 'INCOME', userId }
+        where: { type: 'Income', userId }
       }),
       prisma.transaction.aggregate({
         _sum: { amount: true },
-        where: { type: 'EXPENSE', userId }
+        where: { type: 'Expense', userId }
       }),
       prisma.transaction.count({ where: { userId } })
     ])
@@ -241,7 +241,7 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
     const expensesByCategory = await prisma.transaction.groupBy({
       by: ['categoryId'],
       _sum: { amount: true },
-      where: { type: 'EXPENSE', userId }
+      where: { type: 'Expense', userId }
     })
 
     // No N+1: a single categories query plus in-memory mapping.
@@ -328,11 +328,11 @@ router.get('/analytics', async (req: AuthRequest, res) => {
       // The trend starts with everything before it as opening balance, summed by
       // the database. Two aggregates because income and expense carry signs.
       prisma.transaction.aggregate({
-        where: { userId, type: 'INCOME', date: { lt: trendWindowStart } },
+        where: { userId, type: 'Income', date: { lt: trendWindowStart } },
         _sum: { amount: true }
       }),
       prisma.transaction.aggregate({
-        where: { userId, type: 'EXPENSE', date: { lt: trendWindowStart } },
+        where: { userId, type: 'Expense', date: { lt: trendWindowStart } },
         _sum: { amount: true }
       })
     ])
@@ -365,7 +365,7 @@ router.get('/analytics', async (req: AuthRequest, res) => {
     // Single pass: O(n) instead of walking every transaction per bucket.
     for (const tx of windowTx) {
       const d = new Date(tx.date)
-      const isIncome = tx.type === 'INCOME'
+      const isIncome = tx.type === 'Income'
       const net = isIncome ? tx.amount : -tx.amount
 
       const mi = monthIndex.get(monthKey(d))

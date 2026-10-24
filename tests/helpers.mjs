@@ -186,8 +186,8 @@ export async function createTestUser(ctx, email = 'test@example.com') {
   return {
     user: res.data.user,
     categories: cats.data,
-    expense: cats.data.find(c => c.type === 'EXPENSE'),
-    income: cats.data.find(c => c.type === 'INCOME')
+    expense: cats.data.find(c => c.type === 'Expense'),
+    income: cats.data.find(c => c.type === 'Income')
   }
 }
 

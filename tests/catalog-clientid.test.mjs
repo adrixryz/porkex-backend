@@ -4,7 +4,7 @@ import { withServer, createTestUser } from './helpers.mjs'
 await withServer('catalog-clientid', async ctx => {
   const { expense } = await createTestUser(ctx)
   for (const [path, body] of [
-    ['/api/categories', { name: 'Replay', type: 'EXPENSE', color: '#123456' }],
+    ['/api/categories', { name: 'Replay', type: 'Expense', color: '#123456' }],
     ['/api/budgets', { categoryId: expense.id, amount: 55, period: 'MONTH' }]
   ]) {
     const payload = { ...body, clientId: 'catalog-request' }

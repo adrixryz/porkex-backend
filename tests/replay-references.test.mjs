@@ -5,12 +5,12 @@ await withServer('replay-references', async ctx => {
   const { expense } = await createTestUser(ctx)
   const category = await ctx.call('POST', '/api/categories', {
     name: 'Temporary',
-    type: 'EXPENSE',
+    type: 'Expense',
     color: '#123456'
   })
   const payload = {
     amount: 12,
-    type: 'EXPENSE',
+    type: 'Expense',
     categoryId: category.data.id,
     clientId: 'movement'
   }
@@ -23,7 +23,7 @@ await withServer('replay-references', async ctx => {
   assert.equal(replay.data.categoryId, expense.id)
   const rule = await ctx.call('POST', '/api/recurring', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     categoryId: expense.id,
     frequency: 'MONTH',
     startDate: '2090-01-01',

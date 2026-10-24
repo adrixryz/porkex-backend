@@ -25,12 +25,12 @@ await withServer('api', async ({ call, check, state }) => {
     JSON.stringify(cats[0])
   )
 
-  const expenseCat = cats.find(c => c.type === 'EXPENSE')
-  const incomeCat = cats.find(c => c.type === 'INCOME')
+  const expenseCat = cats.find(c => c.type === 'Expense')
+  const incomeCat = cats.find(c => c.type === 'Income')
 
   r = await call('POST', '/api/transactions', {
     amount: 42.5,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'Alquiler enero',
     categoryId: expenseCat.id,
     date: '2024-01-15'
@@ -43,7 +43,7 @@ await withServer('api', async ({ call, check, state }) => {
 
   r = await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'sin fecha',
     categoryId: expenseCat.id
   })
@@ -55,7 +55,7 @@ await withServer('api', async ({ call, check, state }) => {
 
   r = await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'fecha mala',
     categoryId: expenseCat.id,
     date: 'no-es-fecha'
@@ -66,7 +66,7 @@ await withServer('api', async ({ call, check, state }) => {
   future.setFullYear(future.getFullYear() + 3)
   r = await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'lejano',
     categoryId: expenseCat.id,
     date: future.toISOString()
@@ -76,7 +76,7 @@ await withServer('api', async ({ call, check, state }) => {
   const txId = (await call('GET', '/api/transactions?search=Alquiler')).data.items[0].id
   r = await call('PUT', `/api/transactions/${txId}`, {
     amount: 42.5,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'Alquiler enero',
     categoryId: expenseCat.id,
     date: '2023-06-02'
@@ -89,7 +89,7 @@ await withServer('api', async ({ call, check, state }) => {
 
   r = await call('PUT', `/api/transactions/${txId}`, {
     amount: 42.5,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'Alquiler enero',
     categoryId: expenseCat.id
   })
@@ -110,19 +110,19 @@ await withServer('api', async ({ call, check, state }) => {
   // 3 · filtros, orden y paginación
   await call('POST', '/api/transactions', {
     amount: 900,
-    type: 'INCOME',
+    type: 'Income',
     description: 'Sueldo',
     categoryId: incomeCat.id
   })
   await call('POST', '/api/transactions', {
     amount: 7.25,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'Café con Marta',
     categoryId: expenseCat.id
   })
   await call('POST', '/api/transactions', {
     amount: 3.1,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'Panadería',
     categoryId: expenseCat.id
   })
@@ -153,7 +153,7 @@ await withServer('api', async ({ call, check, state }) => {
   )
 
   r = await call('GET', '/api/transactions?type=INCOME')
-  check('3 filtro por tipo', r.data.total === 1 && r.data.items[0].type === 'INCOME')
+  check('3 filtro por tipo', r.data.total === 1 && r.data.items[0].type === 'Income')
 
   r = await call('GET', `/api/transactions?categoryId=${expenseCat.id}`)
   check('3 filtro por categoría', r.data.total === 4, `total=${r.data.total}`)
@@ -208,9 +208,9 @@ await withServer('api', async ({ call, check, state }) => {
   )
 
   const target = (await call('GET', '/api/categories')).data.find(
-    c => c.type === 'EXPENSE' && c.id !== expenseCat.id
+    c => c.type === 'Expense' && c.id !== expenseCat.id
   )
-  const incomeTarget = (await call('GET', '/api/categories')).data.find(c => c.type === 'INCOME')
+  const incomeTarget = (await call('GET', '/api/categories')).data.find(c => c.type === 'Income')
 
   r = await call('DELETE', `/api/categories/${expenseCat.id}?reassignTo=${incomeTarget.id}`)
   check('4 reasignar a categoría de otro tipo → 400', r.status === 400, r.data?.error)

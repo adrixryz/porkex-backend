@@ -19,7 +19,7 @@ await withServer('clientid', async ({ call, check, state }) => {
 
   const payload = {
     amount: 12.34,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'cafe idempotente',
     categoryId: food.id,
     clientId: 'abc-123_XYZ'
@@ -50,7 +50,7 @@ await withServer('clientid', async ({ call, check, state }) => {
   // ── without clientId nothing is deduped: the old behaviour ──
   r = await call('POST', '/api/transactions', {
     amount: 5,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'sin clientId',
     categoryId: food.id
   })

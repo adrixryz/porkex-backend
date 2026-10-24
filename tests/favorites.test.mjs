@@ -9,7 +9,7 @@ await withServer('favorites', async ctx => {
     name: 'Lunch',
     accountId: `main-${user.id}`,
     categoryId: expense.id,
-    type: 'EXPENSE',
+    type: 'Expense',
     amount: 12.5,
     comment: 'Lunch',
     tagIds: []

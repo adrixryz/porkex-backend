@@ -11,7 +11,7 @@ await withServer('goals', async ctx => {
     assert.equal(r.status, status, JSON.stringify(r.data))
     return r.data
   }
-  await call('POST', '/transactions', { type: 'INCOME', amount: 100, categoryId: income.id }, 201)
+  await call('POST', '/transactions', { type: 'Income', amount: 100, categoryId: income.id }, 201)
   await call('POST', '/goals', { id: goalId, name: 'Vacation', targetAmount: 800 }, 201)
   const transfer = {
     id: randomUUID(),
@@ -28,7 +28,7 @@ await withServer('goals', async ctx => {
   await call(
     'POST',
     '/transactions',
-    { type: 'INCOME', amount: 10, categoryId: income.id, accountId: goalId },
+    { type: 'Income', amount: 10, categoryId: income.id, accountId: goalId },
     400
   )
   await call('DELETE', `/goals/${goalId}`, undefined, 409)

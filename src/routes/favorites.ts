@@ -51,7 +51,7 @@ for (const method of ['post', 'put', 'delete'] as const)
             typeof body.name !== 'string' ||
             !body.name.trim() ||
             body.name.trim().length > 60 ||
-            !['INCOME', 'EXPENSE'].includes(body.type) ||
+            !['Income', 'Expense'].includes(body.type) ||
             amount === null ||
             comment === null ||
             tagIds === null

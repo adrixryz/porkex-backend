@@ -52,15 +52,15 @@ async function catalog(client) {
 async function seed(client) {
   await client.executeMultiple(`
     INSERT INTO "User" (id,name,email,password) VALUES(1,'Personal','owner@example.com','hash');
-    INSERT INTO "Category" (id,name,type,userId) VALUES(1,'Food','EXPENSE',1);
+    INSERT INTO "Category" (id,name,type,userId) VALUES(1,'Food','Expense',1);
     INSERT INTO "RecurringRule" (id,userId,categoryId,amount,type,description,startDate,nextDate,updatedAt)
-      VALUES(1,1,1,100,'EXPENSE','monthly',1767225600000,1793491200000,1767225600000),
-            (2,1,1,200,'EXPENSE','no history',1767225600000,1793491200000,1767225600000);
+      VALUES(1,1,1,100,'Expense','monthly',1767225600000,1793491200000,1767225600000),
+            (2,1,1,200,'Expense','no history',1767225600000,1793491200000,1767225600000);
     INSERT INTO "Transaction" (id,amount,type,description,date,categoryId,userId,recurringId)
-      VALUES(1,100,'EXPENSE','old',1767225600000,1,1,1),
-            (2,100,'EXPENSE','new',1769904000000,1,1,1),
-            (3,100,'EXPENSE','legacy ISO','2025-01-01T00:00:00+00:00',1,1,1),
-            (99,100,'EXPENSE','deleted',1769904000000,1,1,NULL);
+      VALUES(1,100,'Expense','old',1767225600000,1,1,1),
+            (2,100,'Expense','new',1769904000000,1,1,1),
+            (3,100,'Expense','legacy ISO','2025-01-01T00:00:00+00:00',1,1,1),
+            (99,100,'Expense','deleted',1769904000000,1,1,NULL);
     DELETE FROM "Transaction" WHERE id=99;
   `)
 }

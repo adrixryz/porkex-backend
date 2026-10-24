@@ -31,8 +31,8 @@ accountsRouter.get('/dashboard/summary', async (req: AuthRequest, res) => {
           : {})
       }
       const [income, expense, count] = await Promise.all([
-        db.transaction.aggregate({ where: { ...where, type: 'INCOME' }, _sum: { amount: true } }),
-        db.transaction.aggregate({ where: { ...where, type: 'EXPENSE' }, _sum: { amount: true } }),
+        db.transaction.aggregate({ where: { ...where, type: 'Income' }, _sum: { amount: true } }),
+        db.transaction.aggregate({ where: { ...where, type: 'Expense' }, _sum: { amount: true } }),
         db.transaction.count({ where })
       ])
       const totalIncome = income._sum.amount || 0,

@@ -17,7 +17,7 @@ await withServer('budgets', async ({ call, check, state }) => {
   const cats = (await call('GET', '/api/categories')).data
   const food = cats.find(c => c.name === 'Food')
   const housing = cats.find(c => c.name === 'Housing')
-  const salary = cats.find(c => c.type === 'INCOME')
+  const salary = cats.find(c => c.type === 'Income')
 
   // Spending that must count towards this month and this week.
   const today = new Date()
@@ -25,19 +25,19 @@ await withServer('budgets', async ({ call, check, state }) => {
 
   await call('POST', '/api/transactions', {
     amount: 30,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'supermercado',
     categoryId: food.id
   })
   await call('POST', '/api/transactions', {
     amount: 20,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'pan',
     categoryId: food.id
   })
   await call('POST', '/api/transactions', {
     amount: 500,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'alquiler viejo',
     categoryId: housing.id,
     date: dayString(lastMonth)
@@ -233,7 +233,7 @@ await withServer('budgets', async ({ call, check, state }) => {
   // error surfacing as a 500.
   r = await call('POST', '/api/categories', {
     name: 'Temp Probe',
-    type: 'EXPENSE',
+    type: 'Expense',
     color: '#888888'
   })
   check('crear categoria → 201', r.status === 201, JSON.stringify(r.data?.error || r.data.name))
@@ -263,7 +263,7 @@ await withServer('budgets', async ({ call, check, state }) => {
   // A category of its own, so no other spending can leak into the windows.
   r = await call('POST', '/api/categories', {
     name: 'Week Probe',
-    type: 'EXPENSE',
+    type: 'Expense',
     color: '#123456'
   })
   check('categoria para la sonda semanal → 201', r.status === 201, JSON.stringify(r.data))
@@ -282,7 +282,7 @@ await withServer('budgets', async ({ call, check, state }) => {
 
   await call('POST', '/api/transactions', {
     amount: 4,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'sonda domingo',
     categoryId: weekProbe,
     date: sundayStr

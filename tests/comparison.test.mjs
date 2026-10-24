@@ -19,7 +19,7 @@ assert.equal(
 )
 assert.equal(comparisonRanges('year', date('2090-01-01'), date('2024-01-03'), 1), null)
 const compared = compareMovements('year', leap, [
-  { amount: 1000, type: 'INCOME', date: date('2024-02-29') }
+  { amount: 1000, type: 'Income', date: date('2024-02-29') }
 ])
 assert.equal(compared.delta.income.percent, null)
 assert.equal(compared.delta.expense.percent, 0)
@@ -27,9 +27,9 @@ assert.equal(compared.buckets[2].included, false)
 await withServer('comparison', async ctx => {
   const { expense, income } = await createTestUser(ctx)
   for (const [day, amount, category, type] of [
-    ['2023-02-28', 10, expense.id, 'EXPENSE'],
-    ['2023-03-01', 900, expense.id, 'EXPENSE'],
-    ['2024-02-29', 25, income.id, 'INCOME']
+    ['2023-02-28', 10, expense.id, 'Expense'],
+    ['2023-03-01', 900, expense.id, 'Expense'],
+    ['2024-02-29', 25, income.id, 'Income']
   ]) {
     const result = await ctx.call('POST', '/api/transactions', {
       date: day,

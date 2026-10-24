@@ -15,13 +15,13 @@ await withServer('money', async ({ call, check, state }) => {
 
   const cats = (await call('GET', '/api/categories')).data
   const food = cats.find(c => c.name === 'Food')
-  const salary = cats.find(c => c.type === 'INCOME')
+  const salary = cats.find(c => c.type === 'Income')
 
   // ── el caso clasico del punto flotante ──
   for (const amount of [0.1, 0.2]) {
     r = await call('POST', '/api/transactions', {
       amount,
-      type: 'EXPENSE',
+      type: 'Expense',
       description: `gasto ${amount}`,
       categoryId: food.id
     })
@@ -43,7 +43,7 @@ await withServer('money', async ({ call, check, state }) => {
   for (const amount of [1.15, 2.35, 3.45, 4.55, 5.65]) {
     await call('POST', '/api/transactions', {
       amount,
-      type: 'EXPENSE',
+      type: 'Expense',
       description: `decimales ${amount}`,
       categoryId: food.id
     })
@@ -57,7 +57,7 @@ await withServer('money', async ({ call, check, state }) => {
   // ── no se redondean silenciosamente importes con precisión excesiva ──
   r = await call('POST', '/api/transactions', {
     amount: 10.999,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'redondeo',
     categoryId: food.id
   })
@@ -65,7 +65,7 @@ await withServer('money', async ({ call, check, state }) => {
 
   r = await call('POST', '/api/transactions', {
     amount: 0.001,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'insignificante',
     categoryId: food.id
   })
@@ -74,7 +74,7 @@ await withServer('money', async ({ call, check, state }) => {
   // ── filtros por rango: comparan en centimos ──
   await call('POST', '/api/transactions', {
     amount: 100,
-    type: 'INCOME',
+    type: 'Income',
     description: 'sueldo',
     categoryId: salary.id
   })
@@ -98,7 +98,7 @@ await withServer('money', async ({ call, check, state }) => {
   // Una categoria aparte para que el total sea solo lo que se registra aqui.
   r = await call('POST', '/api/categories', {
     name: 'Impuestos',
-    type: 'EXPENSE',
+    type: 'Expense',
     color: '#EA4335'
   })
   check('crear categoria de prueba', r.status === 201, r.data?.error)
@@ -114,7 +114,7 @@ await withServer('money', async ({ call, check, state }) => {
   for (const amount of [7.45, 10]) {
     await call('POST', '/api/transactions', {
       amount,
-      type: 'EXPENSE',
+      type: 'Expense',
       description: `impuesto ${amount}`,
       categoryId: taxes.id
     })
@@ -144,7 +144,7 @@ await withServer('money', async ({ call, check, state }) => {
   // Un céntimo por encima ya debe marcar superacion: aqui esta el borde.
   await call('POST', '/api/transactions', {
     amount: 0.01,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'un centimo',
     categoryId: taxes.id
   })

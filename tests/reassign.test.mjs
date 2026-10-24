@@ -28,7 +28,7 @@ await withServer('reassign', async ({ call, check, state }) => {
   for (const amount of [10, 20, 30]) {
     await call('POST', '/api/transactions', {
       amount,
-      type: 'EXPENSE',
+      type: 'Expense',
       description: `old ${amount}`,
       categoryId: target.id,
       date: dayString(old)
@@ -37,7 +37,7 @@ await withServer('reassign', async ({ call, check, state }) => {
   // Y uno de esta semana, para que el periodo no salga vacio.
   await call('POST', '/api/transactions', {
     amount: 5,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'this week',
     categoryId: target.id,
     date: dayString(now)
@@ -74,12 +74,12 @@ await withServer('reassign', async ({ call, check, state }) => {
   r = await call('DELETE', `/api/categories/${target.id}?reassignTo=${target.id}`)
   check('reasignar a si misma → 400', r.status === 400, r.data?.error)
 
-  const incomeCat = (await call('GET', '/api/categories')).data.find(c => c.type === 'INCOME')
+  const incomeCat = (await call('GET', '/api/categories')).data.find(c => c.type === 'Income')
   r = await call('DELETE', `/api/categories/${target.id}?reassignTo=${incomeCat.id}`)
   check('reasignar a categoria de otro tipo → 400', r.status === 400, r.data?.error)
 
   const dest = (await call('GET', '/api/categories')).data.find(
-    c => c.type === 'EXPENSE' && c.id !== target.id
+    c => c.type === 'Expense' && c.id !== target.id
   )
   r = await call('DELETE', `/api/categories/${target.id}?reassignTo=${dest.id}`)
   check(

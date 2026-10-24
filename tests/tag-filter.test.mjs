@@ -6,7 +6,7 @@ await withServer('tag-filter', async ctx => {
   await ctx.call('POST', '/api/tags', { id: 'alias', name: 'Food' })
   for (let i = 0; i < 3; i++) {
     const r = await ctx.call('POST', '/api/transactions', {
-      type: 'EXPENSE',
+      type: 'Expense',
       categoryId: expense.id,
       amount: i + 1,
       comment: 'Lunch',

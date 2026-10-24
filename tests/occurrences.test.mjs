@@ -14,7 +14,7 @@ await withServer('occurrences', async ctx => {
       'POST',
       '/recurring',
       {
-        type: 'EXPENSE',
+        type: 'Expense',
         amount: 10,
         categoryId: expense.id,
         frequency: 'DAY',
@@ -80,7 +80,7 @@ await withServer('occurrences', async ctx => {
     'POST',
     '/recurring',
     {
-      type: 'EXPENSE',
+      type: 'Expense',
       amount: 10,
       categoryId: expense.id,
       frequency: 'DAY',
@@ -91,7 +91,7 @@ await withServer('occurrences', async ctx => {
   )
   await request('PUT', `/recurring/${rescheduled.id}/occurrences/${day(5)}`, { kind: 'SKIP' })
   const resumed = await request('PUT', '/recurring/' + rescheduled.id, {
-    type: 'EXPENSE',
+    type: 'Expense',
     amount: 10,
     categoryId: expense.id,
     frequency: 'DAY',
@@ -104,7 +104,7 @@ await withServer('occurrences', async ctx => {
     'A future skip must not suppress unrelated earlier dates after a calendar edit'
   )
   const skippedAgain = await request('PUT', '/recurring/' + rescheduled.id, {
-    type: 'EXPENSE',
+    type: 'Expense',
     amount: 10,
     categoryId: expense.id,
     frequency: 'DAY',

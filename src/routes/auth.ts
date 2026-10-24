@@ -19,15 +19,15 @@ router.get('/config', (_req, res) => {
 
 // Default categories seeded per user
 const DEFAULT_CATEGORIES = [
-  { name: 'Salary', type: 'INCOME', color: '#34A853' },
-  { name: 'Freelance', type: 'INCOME', color: '#4285F4' },
-  { name: 'Sales', type: 'INCOME', color: '#A8C7FA' },
-  { name: 'Food', type: 'EXPENSE', color: '#EA4335' },
-  { name: 'Transport', type: 'EXPENSE', color: '#FBBC04' },
-  { name: 'Entertainment', type: 'EXPENSE', color: '#A142F4' },
-  { name: 'Housing', type: 'EXPENSE', color: '#5F6368' },
-  { name: 'Shopping', type: 'EXPENSE', color: '#E8710A' },
-  { name: 'Others', type: 'EXPENSE', color: '#78909C' }
+  { name: 'Salary', type: 'Income', color: '#34A853' },
+  { name: 'Freelance', type: 'Income', color: '#4285F4' },
+  { name: 'Sales', type: 'Income', color: '#A8C7FA' },
+  { name: 'Food', type: 'Expense', color: '#EA4335' },
+  { name: 'Transport', type: 'Expense', color: '#FBBC04' },
+  { name: 'Entertainment', type: 'Expense', color: '#A142F4' },
+  { name: 'Housing', type: 'Expense', color: '#5F6368' },
+  { name: 'Shopping', type: 'Expense', color: '#E8710A' },
+  { name: 'Others', type: 'Expense', color: '#78909C' }
 ]
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/

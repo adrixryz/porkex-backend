@@ -11,17 +11,17 @@ await withServer('limits', async ({ call, check, state }) => {
   state.token = r.data.token
   await call('PUT', `/api/accounts/main-${r.data.user.id}`, { openingBalance: 10000000 })
   const cats = (await call('GET', '/api/categories')).data
-  const expense = cats.find(c => c.type === 'EXPENSE')
+  const expense = cats.find(c => c.type === 'Expense')
   await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'INCOME',
-    categoryId: cats.find(c => c.type === 'INCOME').id
+    type: 'Income',
+    categoryId: cats.find(c => c.type === 'Income').id
   })
 
   // ── transactions ──
   r = await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'x'.repeat(201),
     categoryId: expense.id
   })
@@ -29,7 +29,7 @@ await withServer('limits', async ({ call, check, state }) => {
 
   r = await call('POST', '/api/transactions', {
     amount: 10,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'ok',
     categoryId: expense.id
   })
@@ -37,7 +37,7 @@ await withServer('limits', async ({ call, check, state }) => {
 
   r = await call('POST', '/api/transactions', {
     amount: 10_000_001,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'enorme',
     categoryId: expense.id
   })
@@ -45,7 +45,7 @@ await withServer('limits', async ({ call, check, state }) => {
 
   r = await call('POST', '/api/transactions', {
     amount: 10_000_000,
-    type: 'EXPENSE',
+    type: 'Expense',
     description: 'al limite',
     categoryId: expense.id
   })
@@ -62,18 +62,18 @@ await withServer('limits', async ({ call, check, state }) => {
   check('filtro min > 10 millones → 400', r.status === 400, r.data?.error)
 
   // ── categories ──
-  r = await call('POST', '/api/categories', { name: 'z'.repeat(61), type: 'EXPENSE' })
+  r = await call('POST', '/api/categories', { name: 'z'.repeat(61), type: 'Expense' })
   check('nombre de categoria > 60 → 400', r.status === 400, r.data?.error)
 
-  r = await call('POST', '/api/categories', { name: 'Color malo', type: 'EXPENSE', color: 'rojo' })
+  r = await call('POST', '/api/categories', { name: 'Color malo', type: 'Expense', color: 'rojo' })
   check('color no-hex → 400', r.status === 400, r.data?.error)
 
-  r = await call('POST', '/api/categories', { name: 'Color corto', type: 'EXPENSE', color: '#abc' })
+  r = await call('POST', '/api/categories', { name: 'Color corto', type: 'Expense', color: '#abc' })
   check('color #abc (3 digitos) → 400', r.status === 400, r.data?.error)
 
   r = await call('POST', '/api/categories', {
     name: 'Color bueno',
-    type: 'EXPENSE',
+    type: 'Expense',
     color: '#A1B2C3'
   })
   check(

@@ -71,7 +71,7 @@ await withServer('category-comparison', async ctx => {
   ]) {
     const category = await ctx.call('POST', '/api/categories', {
       name,
-      type: 'EXPENSE',
+      type: 'Expense',
       color: '#123456'
     })
     assert.equal(category.status, 201)
@@ -80,7 +80,7 @@ await withServer('category-comparison', async ctx => {
         await ctx.call('POST', '/api/transactions', {
           date: '2024-03-01',
           amount,
-          type: 'EXPENSE',
+          type: 'Expense',
           categoryId: category.data.id
         })
       ).status,

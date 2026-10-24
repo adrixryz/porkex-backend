@@ -3,7 +3,7 @@ import { withServer, createTestUser } from './helpers.mjs'
 
 await withServer('edit-order', async ctx => {
   const { expense } = await createTestUser(ctx)
-  const payload = { amount: 10, type: 'EXPENSE', categoryId: expense.id }
+  const payload = { amount: 10, type: 'Expense', categoryId: expense.id }
   const created = await ctx.call('POST', '/api/transactions', payload)
   const path = `/api/transactions/${created.data.id}`
   const now = Date.now()

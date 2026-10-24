@@ -14,7 +14,7 @@ await withServer('local-future', async ctx => {
     const day = `${part('year')}-${part('month')}-${part('day')}`
     const tomorrow = new Date(`${day}T00:00:00Z`)
     tomorrow.setUTCDate(tomorrow.getUTCDate() + 1)
-    const payload = { amount: 77, type: 'EXPENSE', categoryId: expense.id, date: day }
+    const payload = { amount: 77, type: 'Expense', categoryId: expense.id, date: day }
     const headers = { 'X-Porkex-Time-Zone': zone }
     const created = await ctx.call('POST', '/api/transactions', payload, headers)
     assert.equal(created.status, 201)

@@ -107,7 +107,7 @@ async function materializeUser(userId: number, today: Date): Promise<RecurringRe
           override?.kind !== 'SKIP'
         ) {
           const amount = override?.amount ?? rule.amount
-          if (rule.type === 'EXPENSE' && (await balance(userId, account.id, tx)) < amount) {
+          if (rule.type === 'Expense' && (await balance(userId, account.id, tx)) < amount) {
             insufficient = true
             break
           }
