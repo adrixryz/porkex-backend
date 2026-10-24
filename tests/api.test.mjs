@@ -152,7 +152,7 @@ await withServer('api', async ({ call, check, state }) => {
     JSON.stringify(r.data.total)
   )
 
-  r = await call('GET', '/api/transactions?type=INCOME')
+  r = await call('GET', '/api/transactions?type=Income')
   check('3 filtro por tipo', r.data.total === 1 && r.data.items[0].type === 'Income')
 
   r = await call('GET', `/api/transactions?categoryId=${expenseCat.id}`)

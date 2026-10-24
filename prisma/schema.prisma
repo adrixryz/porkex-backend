@@ -60,6 +60,8 @@ model Category {
 
 // A spending limit for one category, repeated every WEEK or MONTH.
 model Budget {
+  accountId  String?
+  account    Account? @relation(fields: [accountId], references: [id])
   id         Int      @id @default(autoincrement())
   clientId   String?
   categoryId Int
@@ -71,7 +73,7 @@ model Budget {
   period     String   @default("MONTH")
   createdAt  DateTime @default(now())
 
-  @@unique([userId, categoryId, period])
+  @@unique([userId, accountId, categoryId, period])
   @@unique([userId, clientId])
   @@index([userId, period])
 }
@@ -230,6 +232,7 @@ model Account {
   archived       Boolean         @default(false)
   transactions   Transaction[]
   recurringRules RecurringRule[]
+  budgets        Budget[]
   outgoing       Transfer[]      @relation("SourceAccount")
   incoming       Transfer[]      @relation("DestinationAccount")
 

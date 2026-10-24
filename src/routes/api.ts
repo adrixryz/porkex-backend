@@ -33,7 +33,15 @@ import {
 
 import { favoritesRouter } from './favorites'
 import { accountsRouter } from './accounts'
-import { movementAccount, requireFunds, financialWrite, FinanceError } from '../lib/finance'
+import {
+  movementAccount,
+  requireFunds,
+  financialWrite,
+  FinanceError,
+  accountTransactionScope,
+  mainAccount,
+  balance
+} from '../lib/finance'
 
 const router = Router()
 
@@ -218,41 +226,48 @@ function resolveRange(query: Record<string, unknown>): { range?: DateRange; erro
 router.get('/dashboard', async (req: AuthRequest, res) => {
   const userId = req.userId!
   try {
+    const { account, where } = await accountTransactionScope(userId, req.query.accountId)
+    const { range, error } = resolveRange(req.query as Record<string, unknown>)
+    if (error) return res.status(400).json({ error })
+    const periodWhere = { ...where, ...(range ? { date: range } : {}) }
     const transactions = await prisma.transaction.findMany({
-      where: { userId },
+      where: periodWhere,
       include: { category: true, account: true, ...tagInclude },
-      // Most recent by its own date first; id breaks ties between same-day entries.
-      orderBy: [{ date: 'desc' }, { id: 'desc' }],
-      take: 10
+      // Show the latest registrations even when their movement date is earlier.
+      // The period filter still applies to the movement's calendar date.
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 8
     })
 
     const [incomeSum, expenseSum, transactionCount] = await Promise.all([
       prisma.transaction.aggregate({
         _sum: { amount: true },
-        where: { type: 'Income', userId }
+        where: { ...periodWhere, type: 'Income' }
       }),
       prisma.transaction.aggregate({
         _sum: { amount: true },
-        where: { type: 'Expense', userId }
+        where: { ...periodWhere, type: 'Expense' }
       }),
-      prisma.transaction.count({ where: { userId } })
+      prisma.transaction.count({ where: periodWhere })
     ])
 
-    const expensesByCategory = await prisma.transaction.groupBy({
-      by: ['categoryId'],
+    const movementsByCategory = await prisma.transaction.groupBy({
+      by: ['categoryId', 'type'],
       _sum: { amount: true },
-      where: { type: 'Expense', userId }
+      where: periodWhere
     })
 
     // No N+1: a single categories query plus in-memory mapping.
     const categories = await prisma.category.findMany({ where: { userId } })
     const catById = new Map(categories.map(c => [c.id, c]))
 
-    const pieChartData = []
-    for (const g of expensesByCategory) {
+    const pieChartData: { label: string; value: number; color: string }[] = []
+    const incomePieChartData: typeof pieChartData = []
+    for (const g of movementsByCategory) {
       const cat = catById.get(g.categoryId)
       if (cat && g._sum.amount) {
-        pieChartData.push({
+        const target = g.type === 'Income' ? incomePieChartData : pieChartData
+        target.push({
           label: cat.name,
           value: fromCents(g._sum.amount),
           color: cat.color || '#ccc'
@@ -262,19 +277,29 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
 
     const totalIncome = incomeSum._sum.amount || 0
     const totalExpense = expenseSum._sum.amount || 0
+    let currentBalance: number
+    if (account) currentBalance = await balance(userId, account.id)
+    else {
+      const [movements, opening] = await Promise.all([
+        prisma.transaction.groupBy({ by: ['type'], where: { userId }, _sum: { amount: true } }),
+        prisma.account.aggregate({ where: { userId }, _sum: { openingBalance: true } })
+      ])
+      currentBalance =
+        (opening._sum.openingBalance || 0) +
+        movements.reduce(
+          (sum, group) => sum + (group.type === 'Income' ? 1 : -1) * (group._sum.amount || 0),
+          0
+        )
+    }
 
     res.json({
-      globalBalance: fromCents(
-        totalIncome -
-          totalExpense +
-          ((await prisma.account.aggregate({ where: { userId }, _sum: { openingBalance: true } }))
-            ._sum.openingBalance || 0)
-      ),
+      globalBalance: fromCents(currentBalance),
       totalIncome: fromCents(totalIncome),
       totalExpense: fromCents(totalExpense),
       transactionCount,
       recentTransactions: transactions.map(serializeTransaction),
-      pieChartData
+      pieChartData,
+      incomePieChartData
     })
   } catch (error) {
     if (error instanceof FinanceError)
@@ -314,7 +339,7 @@ router.get('/analytics', async (req: AuthRequest, res) => {
     )
     const windowStart = monthsWindowStart < trendWindowStart ? monthsWindowStart : trendWindowStart
 
-    const [categories, windowTx, olderIncome, olderExpense] = await Promise.all([
+    const [categories, windowTx, olderIncome, olderExpense, accountOpening] = await Promise.all([
       prisma.category.findMany({
         where: { userId },
         select: { id: true, name: true, color: true }
@@ -334,11 +359,15 @@ router.get('/analytics', async (req: AuthRequest, res) => {
       prisma.transaction.aggregate({
         where: { userId, type: 'Expense', date: { lt: trendWindowStart } },
         _sum: { amount: true }
-      })
+      }),
+      prisma.account.aggregate({ where: { userId }, _sum: { openingBalance: true } })
     ])
 
     const catById = new Map(categories.map(c => [c.id, c]))
-    const openingBalance = (olderIncome._sum.amount || 0) - (olderExpense._sum.amount || 0)
+    const openingBalance =
+      (accountOpening._sum.openingBalance || 0) +
+      (olderIncome._sum.amount || 0) -
+      (olderExpense._sum.amount || 0)
 
     // Month buckets (income/expense) and day buckets (running balance).
     const monthBuckets: { key: string; label: string; income: number; expense: number }[] = []
@@ -425,12 +454,12 @@ router.get('/analytics', async (req: AuthRequest, res) => {
     const current = monthBuckets[currentIdx]
     const last = lastIdx >= 0 ? monthBuckets[lastIdx] : null
 
-    let expenseChangePercent = 0
+    let expenseChangePercent: number | null = 0
     if (last) {
       if (last.expense > 0) {
         expenseChangePercent = Math.round(((current.expense - last.expense) / last.expense) * 100)
       } else if (current.expense > 0) {
-        expenseChangePercent = 100
+        expenseChangePercent = null
       }
     }
 
@@ -505,8 +534,7 @@ router.get('/transactions', async (req: AuthRequest, res) => {
 
     const type = cleanText(q.type)
     if (type && type !== 'ALL') {
-      if (!isValidType(type))
-        return res.status(400).json({ error: 'Type must be INCOME or EXPENSE.' })
+      if (!isValidType(type)) return res.status(400).json({ error: 'Choose Expense or Income.' })
       where.type = type
     }
 
@@ -515,6 +543,17 @@ router.get('/transactions', async (req: AuthRequest, res) => {
       const parsed = parseCategoryId(categoryId)
       if (parsed === null) return res.status(400).json({ error: 'Invalid categoryId.' })
       where.categoryId = parsed
+    }
+
+    if (q.accountId !== undefined && q.accountId !== '') {
+      if (typeof q.accountId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(q.accountId))
+        return res.status(400).json({ error: 'Invalid accountId.' })
+      const account = await prisma.account.findFirst({
+        where: { id: q.accountId, userId, isGoal: false }
+      })
+      if (!account) return res.status(404).json({ error: 'Account not found.' })
+      if (account.isMain) where.AND = [{ OR: [{ accountId: account.id }, { accountId: null }] }]
+      else where.accountId = account.id
     }
 
     if (q.tagId !== undefined && q.tagId !== '') {
@@ -654,7 +693,7 @@ async function validateTransactionInput(
   if (amount === null)
     return { error: 'Amount must be a positive number within the allowed range.' }
 
-  if (!isValidType(body.type)) return { error: 'Type must be INCOME or EXPENSE.' }
+  if (!isValidType(body.type)) return { error: 'Choose Expense or Income.' }
 
   const description = commentInput(body as Record<string, unknown>)
   if (description === null) return { error: 'Comment must be a string of at most 200 characters.' }
@@ -968,7 +1007,7 @@ function validateCategoryInput(body: Record<string, unknown>): {
   if (name.length > MAX_CATEGORY_NAME_LENGTH) {
     return { error: `Category name must be at most ${MAX_CATEGORY_NAME_LENGTH} characters.` }
   }
-  if (!isValidType(body.type)) return { error: 'Type must be INCOME or EXPENSE.' }
+  if (!isValidType(body.type)) return { error: 'Choose Expense or Income.' }
 
   const rawColor = body.color
   if (rawColor === null || rawColor === undefined || rawColor === '') {
@@ -1208,35 +1247,58 @@ router.get('/budgets', async (req: AuthRequest, res) => {
 
   try {
     // No period filter means both, so each budget is measured on its own cycle.
+    const { account, where: accountWhere } = await accountTransactionScope(
+      userId,
+      req.query.accountId
+    )
+    const main = await mainAccount(userId)
     const budgets = await prisma.budget.findMany({
-      where: requested ? { userId, period: requested } : { userId },
-      include: { category: { select: { id: true, name: true, color: true, type: true } } },
+      where: {
+        userId,
+        ...(requested ? { period: requested } : {}),
+        ...(account
+          ? account.isMain
+            ? { OR: [{ accountId: account.id }, { accountId: null }] }
+            : { accountId: account.id }
+          : {})
+      },
+      include: {
+        account: { select: { id: true, name: true, archived: true } },
+        category: { select: { id: true, name: true, color: true, type: true } }
+      },
       orderBy: { id: 'asc' }
     })
 
     // A WEEK and a MONTH budget for the same category need different sums, so
     // spending is grouped once per period present in the list.
     const periods = [...new Set(budgets.map(b => b.period as BudgetPeriod))]
-    const spentByPeriod = new Map<BudgetPeriod, Map<number, number>>()
+    const spentByPeriod = new Map<BudgetPeriod, Map<string, number>>()
 
     for (const period of periods) {
       const window = budgetRange(period, today, weekStart)
       const grouped = await prisma.transaction.groupBy({
-        by: ['categoryId'],
-        where: { userId, date: { gte: window.from, lte: window.to } },
+        by: ['categoryId', 'accountId'],
+        where: { ...accountWhere, date: { gte: window.from, lte: window.to } },
         _sum: { amount: true }
       })
-      spentByPeriod.set(period, new Map(grouped.map(g => [g.categoryId, g._sum.amount || 0])))
+      const sums = new Map<string, number>()
+      for (const g of grouped) {
+        const key = `${g.accountId ?? main.id}:${g.categoryId}`
+        sums.set(key, (sums.get(key) || 0) + (g._sum.amount || 0))
+      }
+      spentByPeriod.set(period, sums)
     }
 
-    const spentFor = (period: BudgetPeriod, categoryId: number): number =>
-      spentByPeriod.get(period)?.get(categoryId) ?? 0
+    const spentFor = (period: BudgetPeriod, categoryId: number, accountId: string | null): number =>
+      spentByPeriod.get(period)?.get(`${accountId ?? main.id}:${categoryId}`) ?? 0
 
     const payload = budgets.map(b => {
       const period = b.period as BudgetPeriod
-      const spent = spentFor(period, b.categoryId)
+      const spent = spentFor(period, b.categoryId, b.accountId)
       return {
         id: b.id,
+        accountId: b.accountId ?? main.id,
+        account: b.account ?? { id: main.id, name: main.name, archived: main.archived },
         categoryId: b.categoryId,
         amount: fromCents(b.amount),
         period: b.period,
@@ -1254,13 +1316,13 @@ router.get('/budgets', async (req: AuthRequest, res) => {
     const totals = periods.map(period => {
       const rows = budgets.filter(b => b.period === period)
       const amount = rows.reduce((s, b) => s + b.amount, 0)
-      const spent = rows.reduce((s, b) => s + spentFor(period, b.categoryId), 0)
+      const spent = rows.reduce((s, b) => s + spentFor(period, b.categoryId, b.accountId), 0)
       return {
         period,
         amount: fromCents(amount),
         spent: fromCents(spent),
         // Any single budget over its limit flags the period, not just the aggregate.
-        overBudget: rows.some(b => spentFor(period, b.categoryId) > b.amount),
+        overBudget: rows.some(b => spentFor(period, b.categoryId, b.accountId) > b.amount),
         count: rows.length
       }
     })
@@ -1282,7 +1344,10 @@ router.post('/budgets', async (req: AuthRequest, res) => {
   const findExisting = () =>
     prisma.budget.findFirst({
       where: { userId, clientId },
-      include: { category: { select: { id: true, name: true, color: true, type: true } } }
+      include: {
+        account: { select: { id: true, name: true, archived: true } },
+        category: { select: { id: true, name: true, color: true, type: true } }
+      }
     })
   const replyExisting = async () => {
     if (!clientId) return false
@@ -1317,17 +1382,32 @@ router.post('/budgets', async (req: AuthRequest, res) => {
   }
 
   try {
+    const account = await movementAccount(userId, req.body?.accountId)
     const category = await prisma.category.findFirst({ where: { id: categoryId, userId } })
     if (!category) return res.status(404).json({ error: 'Category not found.' })
 
-    const existing = await prisma.budget.findFirst({ where: { userId, categoryId, period } })
+    const existing = await prisma.budget.findFirst({
+      where: {
+        userId,
+        categoryId,
+        period,
+        ...(account.isMain
+          ? { OR: [{ accountId: account.id }, { accountId: null }] }
+          : { accountId: account.id })
+      }
+    })
     if (existing) {
-      return res.status(409).json({ error: 'This category already has a budget for that period.' })
+      return res
+        .status(409)
+        .json({ error: 'This account already has a budget for that category and period.' })
     }
 
     const budget = await prisma.budget.create({
-      data: { userId, categoryId, amount, period, clientId },
-      include: { category: { select: { id: true, name: true, color: true, type: true } } }
+      data: { userId, accountId: account.id, categoryId, amount, period, clientId },
+      include: {
+        account: { select: { id: true, name: true, archived: true } },
+        category: { select: { id: true, name: true, color: true, type: true } }
+      }
     })
     res.status(201).json({ ...budget, amount: fromCents(budget.amount) })
   } catch (error) {
@@ -1336,7 +1416,9 @@ router.post('/budgets', async (req: AuthRequest, res) => {
     // Two concurrent creates can both pass the "already exists" check.
     if (isUniqueViolation(error)) {
       if (await replyExisting()) return
-      return res.status(409).json({ error: 'This category already has a budget for that period.' })
+      return res
+        .status(409)
+        .json({ error: 'This account already has a budget for that category and period.' })
     }
     console.error('Budget creation failed.', error)
     res.status(500).json({ error: 'Budget creation failed.' })
@@ -1366,24 +1448,43 @@ router.put('/budgets/:id', async (req: AuthRequest, res) => {
     const existing = await prisma.budget.findFirst({ where: { id: budgetId, userId } })
     if (!existing) return res.status(404).json({ error: 'Budget not found.' })
 
+    const account = await movementAccount(
+      userId,
+      req.body?.accountId ?? existing.accountId ?? undefined
+    )
     const taken = await prisma.budget.findFirst({
-      where: { userId, categoryId: existing.categoryId, period, id: { not: budgetId } }
+      where: {
+        userId,
+        categoryId: existing.categoryId,
+        period,
+        id: { not: budgetId },
+        ...(account.isMain
+          ? { OR: [{ accountId: account.id }, { accountId: null }] }
+          : { accountId: account.id })
+      }
     })
     if (taken) {
-      return res.status(409).json({ error: 'This category already has a budget for that period.' })
+      return res
+        .status(409)
+        .json({ error: 'This account already has a budget for that category and period.' })
     }
 
     const budget = await prisma.budget.update({
       where: { id: budgetId },
-      data: { amount, period },
-      include: { category: { select: { id: true, name: true, color: true, type: true } } }
+      data: { amount, period, accountId: account.id },
+      include: {
+        account: { select: { id: true, name: true, archived: true } },
+        category: { select: { id: true, name: true, color: true, type: true } }
+      }
     })
     res.json({ ...budget, amount: fromCents(budget.amount) })
   } catch (error) {
     if (error instanceof FinanceError)
       return res.status(error.status).json({ error: error.message })
     if (isUniqueViolation(error)) {
-      return res.status(409).json({ error: 'This category already has a budget for that period.' })
+      return res
+        .status(409)
+        .json({ error: 'This account already has a budget for that category and period.' })
     }
     console.error('Budget update failed.', error)
     res.status(500).json({ error: 'Budget update failed.' })
@@ -1473,7 +1574,7 @@ async function validateRecurringInput(
     return { error: 'Amount must be a positive number within the allowed range.' }
   }
 
-  if (!isValidType(body.type)) return { error: 'Type must be INCOME or EXPENSE.' }
+  if (!isValidType(body.type)) return { error: 'Choose Expense or Income.' }
 
   const description = commentInput(body)
   if (description === null) return { error: 'Comment must be a string of at most 200 characters.' }

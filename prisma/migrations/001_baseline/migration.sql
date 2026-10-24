@@ -24,6 +24,7 @@ CREATE TABLE "Category" (
 
 -- CreateTable
 CREATE TABLE "Budget" (
+    "accountId" TEXT,
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     "categoryId" INTEGER NOT NULL,
     "userId" INTEGER NOT NULL,
@@ -31,7 +32,8 @@ CREATE TABLE "Budget" (
     "period" TEXT NOT NULL DEFAULT 'MONTH',
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "Budget_categoryId_fkey" FOREIGN KEY ("categoryId") REFERENCES "Category" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT "Budget_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    CONSTRAINT "Budget_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "Budget_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account" ("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -89,7 +91,7 @@ CREATE UNIQUE INDEX "Category_userId_name_key" ON "Category"("userId", "name");
 CREATE INDEX "Budget_userId_period_idx" ON "Budget"("userId", "period");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Budget_userId_categoryId_period_key" ON "Budget"("userId", "categoryId", "period");
+CREATE UNIQUE INDEX "Budget_userId_accountId_categoryId_period_key" ON "Budget"("userId", "accountId", "categoryId", "period");
 
 -- CreateIndex
 CREATE INDEX "RecurringRule_userId_active_nextDate_idx" ON "RecurringRule"("userId", "active", "nextDate");

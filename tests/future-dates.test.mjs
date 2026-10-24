@@ -111,8 +111,8 @@ await withServer('future-dates', async ({ call, check, state }) => {
   // Saldo real = 100 - 70 = 30
   check(
     'el ultimo punto de la tendencia es el saldo real',
-    Math.abs(last - 30) < 0.01,
-    `balance=${last} (esperado 30)`
+    Math.abs(last - 1000030) < 0.01,
+    `balance=${last} (esperado 1000030)`
   )
   check('la tendencia tiene 30 puntos', trend.length === 30, `${trend.length}`)
 

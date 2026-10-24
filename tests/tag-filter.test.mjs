@@ -16,7 +16,7 @@ await withServer('tag-filter', async ctx => {
   }
   const filtered = await ctx.call(
     'GET',
-    '/api/transactions?tagId=alias&search=Lunch&type=EXPENSE&min=2&perPage=1&page=3'
+    '/api/transactions?tagId=alias&search=Lunch&type=Expense&min=2&perPage=1&page=3'
   )
   assert.equal(filtered.status, 200)
   assert.equal(filtered.data.total, 1)

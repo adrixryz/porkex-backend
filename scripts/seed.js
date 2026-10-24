@@ -496,15 +496,16 @@ async function seedAccount(db, user, startDate, day) {
       nextDate: addDays(commute.nextDate, 7)
     }
   })
+  const main = await db.account.create({
+    data: { id: `main-${user.id}`, userId: user.id, name: 'Main', isMain: true }
+  })
   await db.budget.createMany({
     data: buildBudgets(byName).map((b, index) => ({
       ...b,
       userId: user.id,
-      clientId: 'seed-budget-' + index
+      clientId: 'seed-budget-' + index,
+      accountId: main.id
     }))
-  })
-  const main = await db.account.create({
-    data: { id: `main-${user.id}`, userId: user.id, name: 'Main', isMain: true }
   })
   const goal = await db.account.create({
     data: {
