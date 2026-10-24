@@ -2,3 +2,5 @@
 # it. Prettier is configured with endOfLine: "lf", so a CRLF checkout on
 # Windows made `npm run format:check` fail without any real difference.
 * text=auto eol=lf
+# Preserve the original trailing newlines of checksummed historical snapshots.
+prisma/historical-baselines/*.sql whitespace=-blank-at-eof

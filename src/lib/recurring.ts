@@ -77,11 +77,15 @@ export function runDueRules(
 async function materializeUser(userId: number, today: Date): Promise<RecurringResult> {
   const rules = await prisma.recurringRule.findMany({
     where: { userId, active: true },
-    select: { id: true, nextDate: true }
+    select: { id: true, nextDate: true, type: true }
   })
   let created = 0
   let blocked = false
-  for (const { id } of rules.filter(rule => rule.nextDate <= today)) {
+  // Income due in this pass can fund expenses due in the same pass.
+  const due = rules
+    .filter(rule => rule.nextDate <= today)
+    .sort((a, b) => Number(b.type === 'Income') - Number(a.type === 'Income') || a.id - b.id)
+  for (const { id } of due) {
     const result = await prisma.$transaction(async tx => {
       const rule = await tx.recurringRule.findFirst({ where: { id, userId, active: true } })
       if (!rule || rule.nextDate > today) return { count: 0, blocked: false }

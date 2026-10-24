@@ -4,6 +4,7 @@ import type { AuthRequest } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { fromCents, toCents } from '../lib/money'
 import { movementAccount, financialWrite, FinanceError } from '../lib/finance'
+import { acceptFinancialEdit } from '../lib/financialEdits'
 import { commentInput, resolveTagIds } from '../lib/tags'
 export const favoritesRouter = Router()
 const serialize = (row: Favorite) => ({
@@ -35,10 +36,15 @@ for (const method of ['post', 'put', 'delete'] as const)
         throw new FinanceError('Invalid favorite ID.')
       const result = await financialWrite(
         userId,
-        method === 'post' ? `favorite:create:${id}` : null,
+        method === 'post'
+          ? `favorite:create:${id}`
+          : method === 'put'
+            ? `favorite:edit:${body.mutationId}`
+            : null,
         async db => {
           const old = await db.favorite.findFirst({ where: { id, userId } })
           if (method !== 'post' && !old) throw new FinanceError('Favorite not found.', 404)
+          if (method === 'put') await acceptFinancialEdit(db, userId, `favorite:${id}`, body)
           if (method === 'delete') {
             await db.favorite.delete({ where: { id } })
             return { success: true }

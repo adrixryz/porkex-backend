@@ -33,4 +33,4 @@ npm run build
 npm start
 ```
 
-Configure the database and allowed frontend origins using the variables documented in `.env.example`.
+Configure the database and allowed frontend origins using the variables documented in `.env.example`. Before updating an existing installation, create and verify a backup, then run `npm run db:apply`. Startup validates schema compatibility and refuses pending or incompatible migrations without changing the database.

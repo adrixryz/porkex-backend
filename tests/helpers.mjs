@@ -77,6 +77,17 @@ export async function withServer(name, run, extraEnv = {}) {
     ) {
       body = { ...body, mutationId: randomUUID(), editedAt: new Date().toISOString() }
     }
+    if (
+      method === 'PUT' &&
+      /^\/api\/(accounts|goals|transfers|favorites)(?:\/[^/]+)+$/.test(route) &&
+      body
+    ) {
+      body = {
+        ...body,
+        mutationId: body.mutationId ?? randomUUID(),
+        editedAt: body.editedAt ?? new Date().toISOString()
+      }
+    }
     const res = await fetch(base + route, {
       method,
       headers: {

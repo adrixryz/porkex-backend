@@ -6,7 +6,8 @@ import apiRoutes from './routes/api'
 import authRoutes from './routes/auth'
 import { assertJwtSecretIsConfigured } from './middleware/auth'
 import { apiLimiter, authLimiter } from './middleware/rateLimit'
-import { prisma } from './lib/prisma'
+import { prisma, databaseClient } from './lib/prisma'
+import { checkDatabaseSchema } from '../scripts/lib/migrations'
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -112,6 +113,19 @@ app.use(
   }
 )
 
-app.listen(port, () => {
-  console.log(`🐷 Porkex API running at http://localhost:${port}`)
+async function start() {
+  await checkDatabaseSchema(databaseClient)
+  app.listen(port, () => {
+    console.log(`🐷 Porkex API running at http://localhost:${port}`)
+  })
+}
+
+void start().catch(async error => {
+  console.error(
+    'Startup refused:',
+    error instanceof Error ? error.message : 'Invalid database schema.'
+  )
+  await prisma.$disconnect()
+  databaseClient.close()
+  process.exitCode = 1
 })

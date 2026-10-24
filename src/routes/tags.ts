@@ -140,6 +140,15 @@ tagsRouter.delete('/:id', async (req: AuthRequest, res, next) => {
         where: { userId: req.userId!, tags: { some: { tagId: ref.tagId } } },
         data: { editedAt: new Date(), lastEditId: randomUUID() }
       })
+      const favorites = await db.favorite.findMany({ where: { userId: req.userId! } })
+      for (const favorite of favorites) {
+        const ids = JSON.parse(favorite.tagIds) as string[]
+        if (ids.includes(ref.tagId))
+          await db.favorite.update({
+            where: { id: favorite.id },
+            data: { tagIds: JSON.stringify(ids.filter(id => id !== ref.tagId)) }
+          })
+      }
       await db.tag.delete({ where: { id: ref.tagId } })
     })
     res.json({ success: true })

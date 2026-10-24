@@ -85,7 +85,7 @@ await withServer('budgets', async ({ call, check, state }) => {
   check('categoria ajena → 404', r.status === 404, r.data?.error)
 
   r = await call('POST', '/api/budgets', { categoryId: salary.id, amount: 100, period: 'MONTH' })
-  check('presupuesto en categoria de ingresos → 201', r.status === 201, r.data?.error)
+  check('presupuesto en categoria de ingresos → 400', r.status === 400, r.data?.error)
 
   // ── spent computation ──
   r = await call('GET', '/api/budgets?period=MONTH')
@@ -111,7 +111,7 @@ await withServer('budgets', async ({ call, check, state }) => {
   r = await call('GET', '/api/budgets')
   check(
     'sin filtro devuelve ambos periodos',
-    r.data.budgets.length === 3,
+    r.data.budgets.length === 2,
     `n=${r.data.budgets.length}`
   )
 
@@ -172,11 +172,7 @@ await withServer('budgets', async ({ call, check, state }) => {
   )
   const monthTotals = r.data.totals.find(t => t.period === 'MONTH')
   const weekTotals = r.data.totals.find(t => t.period === 'WEEK')
-  check(
-    'total mensual = 50 Food + 0 ingresos',
-    monthTotals.spent === 50,
-    `spent=${monthTotals.spent}`
-  )
+  check('total mensual cuenta solo gastos', monthTotals.spent === 50, `spent=${monthTotals.spent}`)
   check('total semanal calculado aparte', weekTotals.spent === 50, `spent=${weekTotals.spent}`)
 
   // ── update conflicts ──

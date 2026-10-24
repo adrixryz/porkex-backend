@@ -103,14 +103,30 @@ export async function accountList(userId: number, db: Prisma.TransactionClient =
       Number(b.isMain) - Number(a.isMain) ||
       positions.get(a.id)! - positions.get(b.id)!
   )
-  return Promise.all(
-    accounts.map(async account => ({
-      ...account,
-      targetAmount: account.targetAmount === null ? null : fromCents(account.targetAmount),
-      openingBalance: fromCents(account.openingBalance),
-      balance: fromCents(await balance(userId, account.id, db))
-    }))
-  )
+  const [movements, incoming, outgoing] = await Promise.all([
+    db.transaction.groupBy({
+      by: ['accountId', 'type'],
+      where: { userId },
+      _sum: { amount: true }
+    }),
+    db.transfer.groupBy({ by: ['destinationId'], where: { userId }, _sum: { amount: true } }),
+    db.transfer.groupBy({ by: ['sourceId'], where: { userId }, _sum: { amount: true } })
+  ])
+  const balances = new Map(accounts.map(account => [account.id, account.openingBalance]))
+  const add = (id: string, amount: number) => balances.set(id, (balances.get(id) ?? 0) + amount)
+  for (const row of movements)
+    add(
+      row.accountId ?? `main-${userId}`,
+      (row.type === 'Income' ? 1 : -1) * (row._sum.amount ?? 0)
+    )
+  for (const row of incoming) add(row.destinationId, row._sum.amount ?? 0)
+  for (const row of outgoing) add(row.sourceId, -(row._sum.amount ?? 0))
+  return accounts.map(account => ({
+    ...account,
+    targetAmount: account.targetAmount === null ? null : fromCents(account.targetAmount),
+    openingBalance: fromCents(account.openingBalance),
+    balance: fromCents(balances.get(account.id))
+  }))
 }
 export async function financialWrite<T>(
   userId: number,

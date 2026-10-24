@@ -63,6 +63,8 @@ async function recreateSchema(client) {
     // tables are never dropped; unexpected references fail transactionally.
     for (const table of [
       'Favorite',
+      'FinancialEdit',
+      'BalanceAdjustment',
       'FinancialReceipt',
       'Transfer',
       'OccurrenceTag',
@@ -186,6 +188,8 @@ async function wipeUser(prisma, userId) {
   const tags = await prisma.tag.deleteMany({ where: { userId } })
   const categories = await prisma.category.deleteMany({ where: { userId } })
   await prisma.transfer.deleteMany({ where: { userId } })
+  await prisma.financialEdit.deleteMany({ where: { userId } })
+  await prisma.balanceAdjustment.deleteMany({ where: { userId } })
   await prisma.financialReceipt.deleteMany({ where: { userId } })
   await prisma.account.deleteMany({ where: { userId } })
   await prisma.user.delete({ where: { id: userId } })

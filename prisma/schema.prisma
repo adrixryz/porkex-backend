@@ -11,29 +11,31 @@ datasource db {
 }
 
 model User {
-  favorites        Favorite[]
-  id               Int                @id @default(autoincrement())
-  name             String
-  email            String             @unique
-  password         String
-  sessionVersion   Int                @default(0)
-  currency         String             @default("USD")
+  favorites          Favorite[]
+  id                 Int                 @id @default(autoincrement())
+  name               String
+  email              String              @unique
+  password           String
+  sessionVersion     Int                 @default(0)
+  currency           String              @default("USD")
   // Display preferences, mirrored from the frontend so they follow the account
   // to any browser. Plain strings, not enums: the additive deploy tool adds
   // them to an existing table, and SQLite needs a default for a NOT NULL
   // column (see scripts/apply-schema.js).
-  defaultPeriod    String             @default("week")
-  firstDayOfWeek   String             @default("MONDAY")
-  decimalSeparator String             @default(".")
-  accounts         Account[]
-  receipts         FinancialReceipt[]
-  transfers        Transfer[]
-  transactions     Transaction[]
-  categories       Category[]
-  budgets          Budget[]
-  recurringRules   RecurringRule[]
-  tags             Tag[]
-  createdAt        DateTime           @default(now())
+  defaultPeriod      String              @default("week")
+  firstDayOfWeek     String              @default("MONDAY")
+  decimalSeparator   String              @default(".")
+  accounts           Account[]
+  financialEdits     FinancialEdit[]
+  balanceAdjustments BalanceAdjustment[]
+  receipts           FinancialReceipt[]
+  transfers          Transfer[]
+  transactions       Transaction[]
+  categories         Category[]
+  budgets            Budget[]
+  recurringRules     RecurringRule[]
+  tags               Tag[]
+  createdAt          DateTime            @default(now())
 }
 
 model Category {
@@ -253,6 +255,7 @@ model Transfer {
   createdAt     DateTime @default(now())
 
   @@index([userId, date])
+  @@index([userId, createdAt, id])
   @@index([userId, sourceId])
   @@index([userId, destinationId])
 }
@@ -280,4 +283,32 @@ model Favorite {
   createdAt  DateTime @default(now())
 
   @@index([userId, createdAt])
+}
+
+model FinancialEdit {
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id])
+  key        String
+  editedAt   DateTime
+  mutationId String
+
+  @@id([userId, key])
+}
+
+model BalanceAdjustment {
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id])
+  id              String
+  accountId       String
+  accountName     String
+  kind            String
+  previousBalance Int
+  balance         Int
+  effectiveDate   DateTime
+  createdAt       DateTime
+
+  @@id([userId, id])
+  @@index([userId, createdAt, id])
+  @@index([userId, accountId, createdAt])
+  @@index([userId, effectiveDate])
 }

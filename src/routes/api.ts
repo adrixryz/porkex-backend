@@ -339,7 +339,16 @@ router.get('/analytics', async (req: AuthRequest, res) => {
     )
     const windowStart = monthsWindowStart < trendWindowStart ? monthsWindowStart : trendWindowStart
 
-    const [categories, windowTx, olderIncome, olderExpense, accountOpening] = await Promise.all([
+    const [
+      categories,
+      windowTx,
+      olderIncome,
+      olderExpense,
+      accountOpening,
+      allAdjustments,
+      earlierAdjustments,
+      windowAdjustments
+    ] = await Promise.all([
       prisma.category.findMany({
         where: { userId },
         select: { id: true, name: true, color: true }
@@ -360,12 +369,26 @@ router.get('/analytics', async (req: AuthRequest, res) => {
         where: { userId, type: 'Expense', date: { lt: trendWindowStart } },
         _sum: { amount: true }
       }),
-      prisma.account.aggregate({ where: { userId }, _sum: { openingBalance: true } })
+      prisma.account.aggregate({ where: { userId }, _sum: { openingBalance: true } }),
+      prisma.balanceAdjustment.aggregate({
+        where: { userId },
+        _sum: { balance: true, previousBalance: true }
+      }),
+      prisma.balanceAdjustment.aggregate({
+        where: { userId, effectiveDate: { lt: trendWindowStart } },
+        _sum: { balance: true, previousBalance: true }
+      }),
+      prisma.balanceAdjustment.findMany({
+        where: { userId, effectiveDate: { gte: trendWindowStart, lte: today } },
+        select: { effectiveDate: true, balance: true, previousBalance: true }
+      })
     ])
 
     const catById = new Map(categories.map(c => [c.id, c]))
     const openingBalance =
-      (accountOpening._sum.openingBalance || 0) +
+      (accountOpening._sum.openingBalance || 0) -
+      ((allAdjustments._sum.balance || 0) - (allAdjustments._sum.previousBalance || 0)) +
+      ((earlierAdjustments._sum.balance || 0) - (earlierAdjustments._sum.previousBalance || 0)) +
       (olderIncome._sum.amount || 0) -
       (olderExpense._sum.amount || 0)
 
@@ -390,6 +413,10 @@ router.get('/analytics', async (req: AuthRequest, res) => {
     const currentByCat = new Map<number, number>()
     const lastByCat = new Map<number, number>()
     const netByDay = new Map<string, number>()
+    for (const entry of windowAdjustments) {
+      const key = dayKey(entry.effectiveDate)
+      netByDay.set(key, (netByDay.get(key) || 0) + entry.balance - entry.previousBalance)
+    }
 
     // Single pass: O(n) instead of walking every transaction per bucket.
     for (const tx of windowTx) {
@@ -1075,6 +1102,14 @@ router.put('/categories/:id', async (req: AuthRequest, res) => {
 
     // Do not allow changing the type when transactions already reference it.
     if (existing.type !== v.type) {
+      if (await prisma.budget.count({ where: { userId, categoryId: catId } }))
+        return res
+          .status(409)
+          .json({ error: 'Remove spending budgets before changing this category type.' })
+      if (await prisma.favorite.count({ where: { userId, categoryId: catId } }))
+        return res
+          .status(409)
+          .json({ error: 'Update or remove linked favorites before changing this category type.' })
       const txCount = await prisma.transaction.count({ where: { categoryId: catId, userId } })
       if (txCount > 0) {
         return res
@@ -1136,6 +1171,7 @@ router.delete('/categories/:id', async (req: AuthRequest, res) => {
       // change constraints on the production tables.
       await prisma.$transaction([
         prisma.recurringRule.deleteMany({ where: { categoryId: catId, userId } }),
+        prisma.favorite.deleteMany({ where: { userId, categoryId: catId } }),
         prisma.category.delete({ where: { id: catId } })
       ])
       return res.json({ success: true, moved: 0 })
@@ -1178,6 +1214,10 @@ router.delete('/categories/:id', async (req: AuthRequest, res) => {
       prisma.transaction.updateMany({
         where: { categoryId: catId, userId },
         data: { categoryId: targetId, editedAt: new Date(), lastEditId: randomUUID() }
+      }),
+      prisma.favorite.updateMany({
+        where: { userId, categoryId: catId },
+        data: { categoryId: targetId }
       }),
       prisma.category.delete({ where: { id: catId } })
     ])
@@ -1278,7 +1318,7 @@ router.get('/budgets', async (req: AuthRequest, res) => {
       const window = budgetRange(period, today, weekStart)
       const grouped = await prisma.transaction.groupBy({
         by: ['categoryId', 'accountId'],
-        where: { ...accountWhere, date: { gte: window.from, lte: window.to } },
+        where: { ...accountWhere, type: 'Expense', date: { gte: window.from, lte: window.to } },
         _sum: { amount: true }
       })
       const sums = new Map<string, number>()
@@ -1385,6 +1425,8 @@ router.post('/budgets', async (req: AuthRequest, res) => {
     const account = await movementAccount(userId, req.body?.accountId)
     const category = await prisma.category.findFirst({ where: { id: categoryId, userId } })
     if (!category) return res.status(404).json({ error: 'Category not found.' })
+    if (category.type !== 'Expense')
+      return res.status(400).json({ error: 'Choose an expense category for a spending budget.' })
 
     const existing = await prisma.budget.findFirst({
       where: {
@@ -1447,6 +1489,9 @@ router.put('/budgets/:id', async (req: AuthRequest, res) => {
   try {
     const existing = await prisma.budget.findFirst({ where: { id: budgetId, userId } })
     if (!existing) return res.status(404).json({ error: 'Budget not found.' })
+    const category = await prisma.category.findFirst({ where: { id: existing.categoryId, userId } })
+    if (category?.type !== 'Expense')
+      return res.status(400).json({ error: 'Choose an expense category for a spending budget.' })
 
     const account = await movementAccount(
       userId,

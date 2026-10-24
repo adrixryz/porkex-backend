@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -67,8 +67,17 @@ async function seed(client) {
 
 try {
   const fresh = await memory()
+  await assert.rejects(
+    migrationsApi.checkDatabaseSchema(fresh, migrations),
+    /Database is not ready/
+  )
+  assert.equal(
+    (await fresh.execute("SELECT count(*) AS n FROM sqlite_master WHERE type='table'")).rows[0].n,
+    0n
+  )
   assert.equal((await runMigrations(fresh, migrations)).applied, migrations.length)
   assert.equal((await runMigrations(fresh, migrations)).applied, 0)
+  await migrationsApi.checkDatabaseSchema(fresh, migrations)
   assert.equal(
     (await fresh.execute('SELECT COUNT(*) AS count FROM _PorkexMigration')).rows[0].count,
     BigInt(migrations.length)
@@ -272,6 +281,91 @@ try {
     }
   })
   assert.equal(check.status, 0, check.stderr)
+  const receipts = await memory()
+  await runMigrations(receipts, migrations.slice(0, 7))
+  await receipts.execute(
+    "INSERT INTO User(id,name,email,password) VALUES(1,'Owner','receipts@example.test','hash')"
+  )
+  await receipts.execute(
+    "INSERT INTO Account(id,userId,name,openingBalance,isMain) VALUES('main-1',1,'Main',15000,1)"
+  )
+  for (const [key, previousBalance, balance, kind, date] of [
+    ['account:create:main-1', 0, 100, 'opening-balance', '2026-01-01T12:00:00.000Z'],
+    ['account:edit:correction', 100, 150, 'balance-adjustment', '2026-02-01T12:00:00.000Z']
+  ]) {
+    await receipts.execute({
+      sql: 'INSERT INTO FinancialReceipt(userId,key,response) VALUES(1,?,?)',
+      args: [
+        key,
+        JSON.stringify({
+          balanceAdjustment: {
+            accountId: 'main-1',
+            accountName: 'Main',
+            previousBalance,
+            balance,
+            kind,
+            date
+          }
+        })
+      ]
+    })
+  }
+  const savedReceipts = (
+    await receipts.execute('SELECT key,response FROM FinancialReceipt ORDER BY key')
+  ).rows
+  await runMigrations(receipts, migrations)
+  assert.deepEqual(
+    (await receipts.execute('SELECT key,response FROM FinancialReceipt ORDER BY key')).rows,
+    savedReceipts
+  )
+  const events = (
+    await receipts.execute(
+      'SELECT balance,previousBalance,effectiveDate FROM BalanceAdjustment ORDER BY effectiveDate'
+    )
+  ).rows
+  assert.equal(events.length, 2)
+  assert.equal(events[0].balance, 10000n)
+  assert.equal(events[1].previousBalance, 10000n)
+  assert.equal(events[1].balance, 15000n)
+  assert.equal(events[1].effectiveDate, '2026-02-01T00:00:00.000Z')
+  for (const file of readdirSync(join(backend, 'prisma', 'historical-baselines'))) {
+    const sql = readFileSync(join(backend, 'prisma', 'historical-baselines', file), 'utf8')
+    const old = { ...migrations[0], sql, checksum: file.replace('.sql', '') }
+    const previous = [old, ...migrations.slice(1, 7)]
+    const database = await memory()
+    await runMigrations(database, previous)
+    await database.execute(
+      "INSERT INTO User(id,name,email,password) VALUES(1,'Owner','historical@example.test','hash')"
+    )
+    await database.execute(
+      "INSERT INTO Category(id,userId,name,type) VALUES(1,1,'Salary','Income')"
+    )
+    await database.execute(
+      `INSERT INTO "Transaction"(id,userId,categoryId,amount,type,description,date) VALUES(42,1,1,12345,'Income','Preserved',1767225600000)`
+    )
+    await database.execute("UPDATE sqlite_sequence SET seq=99 WHERE name='Transaction'")
+    await assert.rejects(
+      migrationsApi.checkDatabaseSchema(database, migrations),
+      /Database is not ready/
+    )
+    await runMigrations(database, migrations)
+    await migrationsApi.checkDatabaseSchema(database, migrations)
+    assert.equal(
+      (await database.execute("SELECT checksum FROM _PorkexMigration WHERE id='001_baseline'"))
+        .rows[0].checksum,
+      old.checksum
+    )
+    assert.equal(
+      (await database.execute('SELECT amount FROM "Transaction" WHERE id=42')).rows[0].amount,
+      12345n
+    )
+    assert.equal(
+      (await database.execute("SELECT seq FROM sqlite_sequence WHERE name='Transaction'")).rows[0]
+        .seq,
+      99n
+    )
+    assert.equal((await runMigrations(database, migrations)).applied, 0)
+  }
   console.log(
     'PASS migrations: fresh, adoption, legacy normalization, UTC watermark, drift, checksums, rollback and offline Prisma check'
   )

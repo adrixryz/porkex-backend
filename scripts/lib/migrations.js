@@ -205,6 +205,104 @@ async function normalizeLegacy(transaction, baselineSql) {
   }
 }
 
+function historicalBaseline(checksum) {
+  if (!/^[a-f0-9]{64}$/.test(checksum)) return null
+  const file = path.join(BACKEND_DIR, 'prisma', 'historical-baselines', `${checksum}.sql`)
+  if (!fs.existsSync(file)) return null
+  const sql = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n')
+  if (createHash('sha256').update(sql).digest('hex') !== checksum)
+    throw new Error('Historical baseline checksum mismatch.')
+  return { id: '001_baseline', sql, checksum }
+}
+
+/** Upgrade only a schema already verified against a shipped historical baseline.
+ * Copy every table before rebuilding, preserving raw values and AUTOINCREMENT cursors.
+ * The caller owns the write transaction, including its original migration ledger.
+ */
+async function upgradeHistoricalSchema(transaction, targetMigrations) {
+  const reference = await buildReference(targetMigrations)
+  try {
+    const tables = await describe(transaction)
+    const target = await describe(reference.client)
+    const sequences = (await transaction.execute('SELECT name, seq FROM sqlite_sequence')).rows
+    const ordered = []
+    const visit = table => {
+      if (ordered.includes(table.name)) return
+      for (const fk of table.foreignKeys) {
+        const parent = tables.find(candidate => candidate.name === fk.table)
+        if (parent) visit(parent)
+      }
+      ordered.push(table.name)
+    }
+    tables.forEach(visit)
+    for (const table of tables)
+      await transaction.execute(
+        `CREATE TABLE "_PorkexUpgrade_${table.name}" AS SELECT * FROM ${quoteIdentifier(table.name)} ORDER BY rowid`
+      )
+    for (const name of [...ordered].reverse())
+      await transaction.execute(`DROP TABLE ${quoteIdentifier(name)}`)
+    const ddl = (
+      await reference.client.execute(
+        "SELECT type, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name"
+      )
+    ).rows
+    for (const row of ddl) await transaction.execute(row.sql)
+    await transaction.execute('PRAGMA defer_foreign_keys=ON')
+    for (const table of tables) {
+      const columns = table.columns
+        .filter(column =>
+          target
+            .find(row => row.name === table.name)
+            ?.columns.some(next => next.name === column.name)
+        )
+        .map(column => quoteIdentifier(column.name))
+        .join(', ')
+      await transaction.execute(
+        `INSERT INTO ${quoteIdentifier(table.name)} (${columns}) SELECT ${columns} FROM "_PorkexUpgrade_${table.name}" ORDER BY rowid`
+      )
+      await transaction.execute(`DROP TABLE "_PorkexUpgrade_${table.name}"`)
+    }
+    for (const row of sequences) {
+      await transaction.execute({
+        sql: 'UPDATE sqlite_sequence SET seq=? WHERE name=?',
+        args: [row.seq, row.name]
+      })
+      await transaction.execute({
+        sql: 'INSERT INTO sqlite_sequence (name, seq) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name=?)',
+        args: [row.name, row.seq, row.name]
+      })
+    }
+  } finally {
+    reference.client.close()
+  }
+}
+
+async function checkDatabaseSchema(client, migrations = loadMigrations()) {
+  const reference = await buildReference(migrations)
+  try {
+    const applied = (
+      await client.execute('SELECT id, checksum FROM "_PorkexMigration" ORDER BY id')
+    ).rows
+    if (applied.length !== migrations.length) throw new Error('Pending database migrations.')
+    for (let i = 0; i < migrations.length; i++)
+      if (
+        applied[i].id !== migrations[i].id ||
+        (applied[i].checksum !== migrations[i].checksum &&
+          !(i === 0 && historicalBaseline(applied[i].checksum)))
+      )
+        throw new Error('Migration history or checksum mismatch.')
+    if (!sameSchema(await describe(client), reference.versions.at(-1)))
+      throw new Error('Database schema drift detected.')
+  } catch (error) {
+    throw new Error(
+      `Database is not ready. Apply reviewed migrations with npm run db:apply before starting. ${error.message}`,
+      { cause: error }
+    )
+  } finally {
+    reference.client.close()
+  }
+}
+
 async function runMigrations(client, migrations) {
   if (!migrations.length) throw new Error('No versioned migrations found.')
   const reference = await buildReference(migrations)
@@ -219,6 +317,7 @@ async function runMigrations(client, migrations) {
       ).rows.length > 0
     const live = await describe(transaction)
     let applied = []
+    let historical = null
     if (hasLedger) {
       const ledgerReference = createClient({ url: 'file::memory:', intMode: 'bigint' })
       try {
@@ -231,23 +330,56 @@ async function runMigrations(client, migrations) {
         ledgerReference.close()
       }
       applied = (await transaction.execute(`SELECT id, checksum FROM "${LEDGER}" ORDER BY id`)).rows
+      historical =
+        applied[0]?.checksum !== migrations[0].checksum
+          ? historicalBaseline(applied[0]?.checksum || '')
+          : null
       for (let i = 0; i < applied.length; i++) {
-        if (applied[i].id !== migrations[i]?.id || applied[i].checksum !== migrations[i]?.checksum)
+        if (
+          applied[i].id !== migrations[i]?.id ||
+          (applied[i].checksum !== migrations[i]?.checksum && !(i === 0 && historical))
+        )
           throw new Error(
             'Migration history or checksum mismatch. Applied migrations must remain unchanged.'
           )
       }
-      const expected = applied.length ? reference.versions[applied.length - 1] : []
+      let expected = applied.length ? reference.versions[applied.length - 1] : []
+      if (historical && applied.length <= 7) {
+        const previous = await buildReference([historical, ...migrations.slice(1, applied.length)])
+        expected = previous.versions.at(-1)
+        previous.client.close()
+      }
       if (!sameSchema(live, expected))
         throw new Error('Database schema drift detected; nothing was applied.')
     } else if (live.length) {
       const baseline = reference.versions[0]
       if (!sameSchema(live, baseline)) {
-        if (!isKnownLegacy(live, baseline))
-          throw new Error('Unknown existing schema; baseline adoption refused without changes.')
-        await normalizeLegacy(transaction, migrations[0].sql)
+        if (isKnownLegacy(live, baseline)) await normalizeLegacy(transaction, migrations[0].sql)
+        else {
+          for (const file of fs.readdirSync(
+            path.join(BACKEND_DIR, 'prisma', 'historical-baselines')
+          )) {
+            const candidate = historicalBaseline(file.replace('.sql', ''))
+            const previous = await buildReference([candidate])
+            try {
+              if (
+                sameSchema(live, previous.versions[0]) ||
+                isKnownLegacy(live, previous.versions[0])
+              ) {
+                historical = candidate
+                if (!sameSchema(live, previous.versions[0]))
+                  await normalizeLegacy(transaction, candidate.sql)
+                break
+              }
+            } finally {
+              previous.client.close()
+            }
+          }
+          if (!historical)
+            throw new Error('Unknown existing schema; baseline adoption refused without changes.')
+        }
       }
-      applied = [migrations[0]]
+      applied = [historical ?? migrations[0]]
     }
     if (!hasLedger) {
       await transaction.execute(LEDGER_SQL)
@@ -259,6 +391,8 @@ async function runMigrations(client, migrations) {
     }
     let count = 0
     for (const migration of migrations.slice(applied.length)) {
+      if (migration.id === '008_finance_recovery' && historical)
+        await upgradeHistoricalSchema(transaction, migrations.slice(0, 7))
       await transaction.executeMultiple(migration.sql)
       await transaction.execute({
         sql: `INSERT INTO "${LEDGER}" (id, checksum) VALUES (?, ?)`,
@@ -287,5 +421,7 @@ module.exports = {
   sameSchema,
   buildReference,
   checkPrismaSchema,
-  runMigrations
+  runMigrations,
+  checkDatabaseSchema,
+  historicalBaseline
 }
