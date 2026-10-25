@@ -30,6 +30,14 @@ await withServer('movement-csv', async ctx => {
       `2020-01-02;Expense;Main;${expense.name};;Later;2.25`
     ].join('\r\n')
   const preview = await snapshot(csv)
+  const trailingSlashPreview = await request('/preview/', {
+    csv: csv + '\n'.repeat(60_000)
+  })
+  assert.deepEqual(
+    trailingSlashPreview,
+    preview,
+    'A trailing slash keeps the CSV body limit policy'
+  )
   assert.equal(preview.rows.length, 4)
   assert.deepEqual(
     preview.rows.map(row => row.line),

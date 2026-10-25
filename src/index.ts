@@ -53,7 +53,7 @@ if (CORS_ORIGINS.length > 0) {
 }
 
 app.use((req, res, next) => {
-  if (/^\/api\/transactions\/import(?:\/preview)?$/.test(req.path) && req.method === 'POST')
+  if (/^\/api\/transactions\/import(?:\/preview)?\/?$/.test(req.path) && req.method === 'POST')
     return next()
   express.json()(req, res, next)
 })
