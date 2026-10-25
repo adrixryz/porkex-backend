@@ -154,6 +154,41 @@ await withServer('movement-csv', async ctx => {
     'Invalid rows, malformed CSV, cross-type categories, stale preview and invalid selection fail atomically',
     true
   )
+  const cash = (await ctx.call('GET', '/api/accounts')).data.find(row => row.name === 'Efectivo')
+  assert.equal((await ctx.call('PUT', `/api/accounts/${cash.id}`, { balance: 0 })).status, 200)
+  assert.equal((await ctx.call('PUT', `/api/accounts/${cash.id}`, { archived: true })).status, 200)
+  const archivedBackup = await snapshot(await exportCsv('type=ALL'))
+  const archivedRows = archivedBackup.rows.filter(row => row.account === 'Efectivo')
+  assert(archivedRows.length > 0)
+  assert(archivedRows.every(row => row.duplicate.existing && !row.importable && !row.errors.length))
+  const archivedCsv = [header, '2020-01-02;Expense;Efectivo;Café;;;1.00'].join('\n')
+  const archivedPreview = await snapshot(archivedCsv)
+  assert(archivedPreview.rows[0].errors.some(error => error.includes('Restore')))
+  await request('', confirmation(archivedCsv, archivedPreview), 400)
+  await request(
+    '',
+    confirmation(await exportCsv('type=ALL'), archivedBackup, {
+      selectedLines: [archivedRows[0].line]
+    }),
+    400
+  )
+  ctx.check(
+    'Archived backup duplicates remain valid preview rows but cannot create archived movements',
+    true
+  )
+
+  const duplicateCategory = await ctx.call('POST', '/api/categories', {
+    name: ' CAFE\u0301 ',
+    type: 'Income'
+  })
+  assert.equal(duplicateCategory.status, 409)
+  const renameDuplicate = await ctx.call('PUT', `/api/categories/${income.id}`, {
+    name: 'café',
+    type: 'Income'
+  })
+  assert.equal(renameDuplicate.status, 409)
+  ctx.check('Category creation and rename reject canonical duplicate names across types', true)
+
   await createTestUser(ctx, 'csv-other@example.com')
   assert.equal((await snapshot(staleCsv)).rows[0].duplicate.existing, false)
   const privateExport = await exportCsv('type=ALL')

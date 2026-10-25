@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { prisma } from './prisma'
-import { catalogName } from './catalogNames'
+import { catalogName, catalogNameKey } from './catalogNames'
+import { assertCategoryNamesAvailable } from './categories'
 import { dayKey, isDayString, parseDay } from './dates'
 import { FinanceError, balance, mainAccount } from './finance'
 import { toCents, fromCents } from './money'
@@ -15,7 +16,7 @@ async function eachBatch<T>(items: T[], save: (batch: T[]) => Promise<unknown>) 
     await save(items.slice(index, index + BATCH_SIZE))
 }
 export const digest = (value: string) => createHash('sha256').update(value).digest('hex')
-const keyOf = (name: string) => name.normalize('NFC').toLowerCase()
+const keyOf = catalogNameKey
 
 /** Strict semicolon CSV with doubled quotes, UTF-8 BOM and quoted multiline cells. */
 export function parseCsv(value: unknown) {
@@ -90,6 +91,7 @@ export interface CsvRow {
   duplicate: { existing: boolean; file: boolean }
   accountId: string | null
   categoryId: number | null
+  importable: boolean
 }
 
 function signature(
@@ -165,8 +167,7 @@ export async function previewCsv(
     if (matches.length > 1)
       errors.push('More than one account has this name. Rename the accounts before importing.')
     const match = matches.length === 1 ? matches[0] : undefined
-    if (match?.archived || match?.isGoal)
-      errors.push('Choose an active regular account, not an archived account or goal.')
+    if (match?.isGoal) errors.push('Choose a regular account, not a savings goal.')
     const cat = categoryNames.get(keyOf(category))
     if (cat && cat.type !== type)
       errors.push(`Category "${cat.name}" already belongs to ${cat.type}.`)
@@ -187,7 +188,8 @@ export async function previewCsv(
       errors,
       duplicate: { existing: false, file: false },
       accountId: match?.id ?? (keyOf(account) === 'main' ? `main-${userId}` : null),
-      categoryId: cat?.id ?? null
+      categoryId: cat?.id ?? null,
+      importable: !match?.archived && !match?.isGoal
     }
   })
   for (const row of rows)
@@ -226,6 +228,8 @@ export async function previewCsv(
     const key = signature(row)
     row.duplicate = { existing: saved.has(key), file: seen.has(key) }
     seen.add(key)
+    if (!row.importable && !row.duplicate.existing)
+      row.errors.push('Restore the archived account before importing new transactions into it.')
   }
   const usedAccounts = new Map<string, { name: string; balance: number; isNew: boolean }>()
   for (const row of rows) {
@@ -306,6 +310,10 @@ export async function importCsv(userId: number, body: Record<string, unknown>, t
         .sort((a, b) => a.date.localeCompare(b.date) || a.line - b.line)
       if (rows.length !== selected.size)
         throw new FinanceError('The selection contains unknown CSV rows.')
+      if (rows.some(row => !row.importable))
+        throw new FinanceError(
+          'Transactions in archived accounts are already saved. Restore the account before importing them again.'
+        )
       const accounts = new Map<string, string>()
       const categories = new Map<string, number>()
       const existingTags = await db.tag.findMany({ where: { userId } })
@@ -343,6 +351,12 @@ export async function importCsv(userId: number, body: Record<string, unknown>, t
         }
       }
       await eachBatch(newAccounts, data => db.account.createMany({ data }))
+      if (newCategories.size)
+        await assertCategoryNamesAvailable(
+          userId,
+          [...newCategories.values()].map(category => category.name),
+          db
+        )
       await eachBatch([...newCategories.values()], async data => {
         await db.category.createMany({ data })
         const created = await db.category.findMany({

@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from './prisma'
 import { fromCents } from './money'
+import { catalogNameKey } from './catalogNames'
 
 export class FinanceError extends Error {
   constructor(
@@ -110,17 +111,14 @@ export async function assertAccountNameAvailable(
   db: Prisma.TransactionClient,
   exceptId?: string
 ) {
-  const normalized = name.trim().normalize('NFC').toLowerCase()
+  const normalized = catalogNameKey(name)
   const accounts = await db.account.findMany({
     where: { userId },
     select: { id: true, name: true }
   })
   if (
     (normalized === 'main' && exceptId !== `main-${userId}`) ||
-    accounts.some(
-      account =>
-        account.id !== exceptId && account.name.trim().normalize('NFC').toLowerCase() === normalized
-    )
+    accounts.some(account => account.id !== exceptId && catalogNameKey(account.name) === normalized)
   )
     throw new FinanceError('An account with that name already exists.', 409)
 }

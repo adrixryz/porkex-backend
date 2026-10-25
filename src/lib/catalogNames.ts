@@ -8,3 +8,5 @@ export function catalogName(value: unknown, maxLength: number): string | null {
 }
 
 export const catalogNameError = 'Use letters, numbers, spaces and hyphens only.'
+
+export const catalogNameKey = (name: string) => name.trim().normalize('NFC').toLowerCase()

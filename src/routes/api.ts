@@ -12,6 +12,7 @@ import { tagsRouter } from './tags'
 import { movementCsvRouter } from './movementCsv'
 import { transactionFilters } from '../lib/transactionFilters'
 import { catalogName, catalogNameError } from '../lib/catalogNames'
+import { assertCategoryNameAvailable } from '../lib/categories'
 import { comparisonsRouter } from './comparisons'
 import { occurrencesRouter } from './occurrences'
 import { commentInput, resolveTagIds, tagInclude } from '../lib/tags'
@@ -959,16 +960,6 @@ router.get('/categories', async (req: AuthRequest, res) => {
   }
 })
 
-async function isDuplicateCategoryName(
-  userId: number,
-  name: string,
-  excludeId?: number
-): Promise<boolean> {
-  const cats = await prisma.category.findMany({ where: { userId } })
-  const lower = name.toLowerCase()
-  return cats.some(c => c.name.toLowerCase() === lower && c.id !== excludeId)
-}
-
 // Shared by POST and PUT. `color` is undefined when the field was not sent at
 // all, which PUT uses to keep the stored value; null means "no color".
 function validateCategoryInput(body: Record<string, unknown>): {
@@ -1005,17 +996,22 @@ router.post('/categories', async (req: AuthRequest, res) => {
     }
     const v = validateCategoryInput(req.body ?? {})
     if (v.error) return res.status(400).json({ error: v.error })
-    if (await isDuplicateCategoryName(userId, v.name!)) {
-      return res.status(409).json({ error: 'A category with that name already exists.' })
-    }
-    const cat = await prisma.category.create({
-      data: { name: v.name!, type: v.type!, color: v.color ?? null, userId, clientId }
+    const result = await prisma.$transaction(async db => {
+      if (clientId) {
+        const saved = await db.category.findFirst({ where: { userId, clientId } })
+        if (saved) return { cat: saved, created: false }
+      }
+      await assertCategoryNameAvailable(userId, v.name!, db)
+      const cat = await db.category.create({
+        data: { name: v.name!, type: v.type!, color: v.color ?? null, userId, clientId }
+      })
+      return { cat, created: true }
     })
-    res.status(201).json(cat)
+    res.status(result.created ? 201 : 200).json(result.cat)
   } catch (error) {
     if (error instanceof FinanceError)
       return res.status(error.status).json({ error: error.message })
-    // Two concurrent creates with the same name can both pass the check above.
+    // Preserve conflicts and idempotent responses for database uniqueness failures.
     if (isUniqueViolation(error)) {
       if (clientId) {
         const existing = await findExisting()
@@ -1038,50 +1034,49 @@ router.put('/categories/:id', async (req: AuthRequest, res) => {
   if (v.error) return res.status(400).json({ error: v.error })
 
   try {
-    const existing = await prisma.category.findFirst({ where: { id: catId, userId } })
-    if (!existing) return res.status(404).json({ error: 'Category not found.' })
+    const cat = await prisma.$transaction(async db => {
+      const existing = await db.category.findFirst({ where: { id: catId, userId } })
+      if (!existing) throw new FinanceError('Category not found.', 404)
 
-    if (await isDuplicateCategoryName(userId, v.name!, catId)) {
-      return res.status(409).json({ error: 'A category with that name already exists.' })
-    }
+      await assertCategoryNameAvailable(userId, v.name!, db, catId)
 
-    // Do not allow changing the type when transactions already reference it.
-    if (existing.type !== v.type) {
-      if (await prisma.budget.count({ where: { userId, categoryId: catId } }))
-        return res
-          .status(409)
-          .json({ error: 'Remove spending budgets before changing this category type.' })
-      if (await prisma.favorite.count({ where: { userId, categoryId: catId } }))
-        return res
-          .status(409)
-          .json({ error: 'Update or remove linked favorites before changing this category type.' })
-      const txCount = await prisma.transaction.count({ where: { categoryId: catId, userId } })
-      if (txCount > 0) {
-        return res
-          .status(409)
-          .json({ error: 'Cannot change type: category has existing transactions.' })
-      }
-      const incompatibleOverrides = await prisma.occurrenceOverride.count({
-        where: { categoryId: catId, processedAt: null }
-      })
-      if (incompatibleOverrides)
-        return res.status(409).json({
-          error: 'Category is used by a next-only edit. Edit or skip that occurrence first.'
+      // Do not allow changing the type when transactions already reference it.
+      if (existing.type !== v.type) {
+        if (await db.budget.count({ where: { userId, categoryId: catId } }))
+          throw new FinanceError('Remove spending budgets before changing this category type.', 409)
+        if (await db.favorite.count({ where: { userId, categoryId: catId } }))
+          throw new FinanceError(
+            'Update or remove linked favorites before changing this category type.',
+            409
+          )
+        const txCount = await db.transaction.count({ where: { categoryId: catId, userId } })
+        if (txCount > 0) {
+          throw new FinanceError('Cannot change type: category has existing transactions.', 409)
+        }
+        const incompatibleOverrides = await db.occurrenceOverride.count({
+          where: { categoryId: catId, processedAt: null }
         })
-      const incompatibleRules = await prisma.recurringRule.count({
-        where: { categoryId: catId, userId, type: { not: v.type! } }
-      })
-      if (incompatibleRules > 0) {
-        return res
-          .status(409)
-          .json({ error: 'Cannot change type: category has incompatible recurring rules.' })
+        if (incompatibleOverrides)
+          throw new FinanceError(
+            'Category is used by a next-only edit. Edit or skip that occurrence first.',
+            409
+          )
+        const incompatibleRules = await db.recurringRule.count({
+          where: { categoryId: catId, userId, type: { not: v.type! } }
+        })
+        if (incompatibleRules > 0) {
+          throw new FinanceError(
+            'Cannot change type: category has incompatible recurring rules.',
+            409
+          )
+        }
       }
-    }
 
-    const cat = await prisma.category.update({
-      where: { id: catId },
-      // A missing color keeps the stored one; a sent color replaces it.
-      data: { name: v.name!, type: v.type!, color: v.color === null ? existing.color : v.color }
+      return db.category.update({
+        where: { id: catId },
+        // A missing color keeps the stored one; a sent color replaces it.
+        data: { name: v.name!, type: v.type!, color: v.color === null ? existing.color : v.color }
+      })
     })
     res.json(cat)
   } catch (error) {
