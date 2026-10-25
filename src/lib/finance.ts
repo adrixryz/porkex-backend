@@ -55,13 +55,22 @@ export async function balance(userId: number, id: string, db: Prisma.Transaction
   )
 }
 /** Optional owned account scope, including legacy movements belonging to Main. */
-export async function accountTransactionScope(userId: number, accountId: unknown) {
+export async function accountTransactionScope(
+  userId: number,
+  accountId: unknown,
+  includeArchived = false
+) {
   if (accountId === undefined)
     return { account: null, where: { userId } as Prisma.TransactionWhereInput }
   if (typeof accountId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(accountId))
     throw new FinanceError('Invalid account ID.')
   const account = await prisma.account.findFirst({
-    where: { id: accountId, userId, archived: false, isGoal: false }
+    where: {
+      id: accountId,
+      userId,
+      ...(!includeArchived ? { archived: false } : {}),
+      isGoal: false
+    }
   })
   if (!account) throw new FinanceError('Choose an active account.', 404)
   const where: Prisma.TransactionWhereInput = {

@@ -17,6 +17,24 @@ import { invalidateRecurring } from '../lib/recurring'
 
 export const movementCsvRouter = Router()
 
+movementCsvRouter.get('/transactions/import/:id', async (req: AuthRequest, res, next) => {
+  if (!/^[0-9a-f-]{36}$/i.test(String(req.params.id)))
+    return res.status(400).json({ error: 'Invalid import ID.' })
+  try {
+    const receipt = await prisma.financialReceipt.findUnique({
+      where: { userId_key: { userId: req.userId!, key: `csv:import:${req.params.id}` } }
+    })
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(
+      receipt
+        ? { state: 'confirmed', result: JSON.parse(receipt.response) }
+        : { state: 'unconfirmed' }
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
 movementCsvRouter.get('/transactions/export', async (req: AuthRequest, res, next) => {
   try {
     const where = await transactionFilters(req.userId!, req.query as Record<string, unknown>)

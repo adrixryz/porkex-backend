@@ -1,3 +1,4 @@
+import { accountTransactionScope } from '../lib/finance'
 import { Router } from 'express'
 import type { AuthRequest } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
@@ -44,14 +45,19 @@ comparisonsRouter.get('/category-comparison', async (req: AuthRequest, res, next
         }
       : comparisonRanges(mode as 'month' | 'week' | 'year', anchor, today, weekStart)!
   try {
+    const { where: scope } = await accountTransactionScope(req.userId!, req.query.accountId, true)
     const [rows, history] = await Promise.all([
       prisma.transaction.findMany({
         where: {
-          userId: req.userId!,
+          ...scope,
           type: String(type),
-          OR: [
-            { date: { gte: ranges.currentStart, lt: ranges.currentEnd } },
-            { date: { gte: ranges.previousStart, lt: ranges.previousEnd } }
+          AND: [
+            {
+              OR: [
+                { date: { gte: ranges.currentStart, lt: ranges.currentEnd } },
+                { date: { gte: ranges.previousStart, lt: ranges.previousEnd } }
+              ]
+            }
           ]
         },
         select: {
@@ -60,7 +66,7 @@ comparisonsRouter.get('/category-comparison', async (req: AuthRequest, res, next
           category: { select: { id: true, name: true, color: true } }
         }
       }),
-      prisma.transaction.aggregate({ where: { userId: req.userId!, type }, _min: { date: true } })
+      prisma.transaction.aggregate({ where: { ...scope, type }, _min: { date: true } })
     ])
     res.json({
       mode,
@@ -102,12 +108,17 @@ comparisonsRouter.get('/comparison', async (req: AuthRequest, res, next) => {
   if (!ranges)
     return res.status(400).json({ error: 'The comparison period cannot start in the future.' })
   try {
+    const { where: scope } = await accountTransactionScope(req.userId!, req.query.accountId, true)
     const rows = await prisma.transaction.findMany({
       where: {
-        userId: req.userId!,
-        OR: [
-          { date: { gte: ranges.currentStart, lt: ranges.currentEnd } },
-          { date: { gte: ranges.previousStart, lt: ranges.previousEnd } }
+        ...scope,
+        AND: [
+          {
+            OR: [
+              { date: { gte: ranges.currentStart, lt: ranges.currentEnd } },
+              { date: { gte: ranges.previousStart, lt: ranges.previousEnd } }
+            ]
+          }
         ]
       },
       select: { amount: true, type: true, date: true }

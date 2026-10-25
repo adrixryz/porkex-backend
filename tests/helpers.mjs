@@ -79,7 +79,9 @@ export async function withServer(name, run, extraEnv = {}) {
     }
     if (
       method === 'PUT' &&
-      /^\/api\/(accounts|goals|transfers|favorites)(?:\/[^/]+)+$/.test(route) &&
+      /^\/api\/(?:profile|(?:accounts|goals|transfers|favorites|categories|budgets|recurring)(?:\/[^/]+)+)$/.test(
+        route
+      ) &&
       body
     ) {
       body = {
