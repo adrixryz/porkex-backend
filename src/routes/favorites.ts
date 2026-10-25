@@ -6,6 +6,7 @@ import { fromCents, toCents } from '../lib/money'
 import { movementAccount, financialWrite, FinanceError } from '../lib/finance'
 import { acceptFinancialEdit } from '../lib/financialEdits'
 import { commentInput, resolveTagIds } from '../lib/tags'
+import { catalogName, catalogNameError } from '../lib/catalogNames'
 export const favoritesRouter = Router()
 const serialize = (row: Favorite) => ({
   ...row,
@@ -49,14 +50,16 @@ for (const method of ['post', 'put', 'delete'] as const)
             await db.favorite.delete({ where: { id } })
             return { success: true }
           }
+          const name = catalogName(body.name, 60)
+          if (!name)
+            throw new FinanceError(
+              `Favorite name must contain 1–60 characters. ${catalogNameError}`
+            )
           const amount = toCents(body.amount),
             comment = commentInput(body),
             categoryId = Number(body.categoryId),
             tagIds = await resolveTagIds(userId, body.tagIds ?? [], db)
           if (
-            typeof body.name !== 'string' ||
-            !body.name.trim() ||
-            body.name.trim().length > 60 ||
             !['Income', 'Expense'].includes(body.type) ||
             amount === null ||
             comment === null ||
@@ -71,7 +74,7 @@ for (const method of ['post', 'put', 'delete'] as const)
           if (!category) throw new FinanceError('Choose a valid category.')
           const account = await movementAccount(userId, body.accountId, db)
           const data = {
-            name: body.name.trim(),
+            name,
             amount,
             type: body.type,
             comment,

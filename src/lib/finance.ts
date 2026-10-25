@@ -73,7 +73,8 @@ export async function accountTransactionScope(userId: number, accountId: unknown
 export async function requireFunds(
   userId: number,
   ids: (string | null | undefined)[],
-  db: Prisma.TransactionClient
+  db: Prisma.TransactionClient,
+  previousFunds?: ReadonlyMap<string, number>
 ) {
   for (const id of new Set(ids)) {
     const actual = id ?? (await mainAccount(userId, db)).id
@@ -81,12 +82,47 @@ export async function requireFunds(
     const account = await db.account.findUnique({ where: { id: actual } })
     if (account?.archived && funds !== 0)
       throw new FinanceError('Restore the archived account before changing its balance.', 409)
-    if (funds < 0)
+    if (funds < 0 && funds < Math.min(0, previousFunds?.get(actual) ?? 0))
       throw new FinanceError(
         'Insufficient funds. This change would leave an account with a negative balance.',
         409
       )
   }
+}
+
+/** Capture before writing so imported debt can improve without permitting new debt. */
+export async function captureFunds(
+  userId: number,
+  ids: (string | null | undefined)[],
+  db: Prisma.TransactionClient
+) {
+  const actualIds = new Set<string>()
+  for (const id of ids) actualIds.add(id ?? (await mainAccount(userId, db)).id)
+  return new Map(
+    await Promise.all([...actualIds].map(async id => [id, await balance(userId, id, db)] as const))
+  )
+}
+
+/** Checked inside the write transaction, with the same case-insensitive policy as categories. */
+export async function assertAccountNameAvailable(
+  userId: number,
+  name: string,
+  db: Prisma.TransactionClient,
+  exceptId?: string
+) {
+  const normalized = name.trim().normalize('NFC').toLowerCase()
+  const accounts = await db.account.findMany({
+    where: { userId },
+    select: { id: true, name: true }
+  })
+  if (
+    (normalized === 'main' && exceptId !== `main-${userId}`) ||
+    accounts.some(
+      account =>
+        account.id !== exceptId && account.name.trim().normalize('NFC').toLowerCase() === normalized
+    )
+  )
+    throw new FinanceError('An account with that name already exists.', 409)
 }
 export async function accountList(userId: number, db: Prisma.TransactionClient = prisma) {
   await mainAccount(userId, db)

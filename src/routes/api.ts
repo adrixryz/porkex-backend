@@ -5,10 +5,13 @@ import type { Prisma } from '@prisma/client'
 import { AuthRequest, authMiddleware, generateToken } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { isValidCurrency } from '../lib/currencies'
-import { fromCents, toCents, toCentsNonNegative } from '../lib/money'
+import { fromCents, toCents } from '../lib/money'
 import { isUniqueViolation } from '../lib/errors'
 import { passwordError } from '../lib/passwords'
 import { tagsRouter } from './tags'
+import { movementCsvRouter } from './movementCsv'
+import { transactionFilters } from '../lib/transactionFilters'
+import { catalogName, catalogNameError } from '../lib/catalogNames'
 import { comparisonsRouter } from './comparisons'
 import { occurrencesRouter } from './occurrences'
 import { commentInput, resolveTagIds, tagInclude } from '../lib/tags'
@@ -36,6 +39,7 @@ import { accountsRouter } from './accounts'
 import {
   movementAccount,
   requireFunds,
+  captureFunds,
   financialWrite,
   FinanceError,
   accountTransactionScope,
@@ -78,6 +82,7 @@ router.use(async (req: AuthRequest, res, next) => {
   next()
 })
 
+router.use(movementCsvRouter)
 router.use(accountsRouter)
 router.use('/favorites', favoritesRouter)
 router.use('/tags', tagsRouter)
@@ -95,7 +100,6 @@ const MAX_ANALYTICS_DAYS = 120
 const SORT_FIELDS = ['date', 'amount'] as const
 const DEFAULT_PER_PAGE = 20
 const MAX_PER_PAGE = 100
-const MAX_SEARCH_LENGTH = 100
 const MAX_DESCRIPTION_LENGTH = 200
 const MAX_CATEGORY_NAME_LENGTH = 60
 const MAX_PROFILE_NAME_LENGTH = 80
@@ -553,72 +557,9 @@ router.get('/transactions', async (req: AuthRequest, res) => {
   const userId = req.userId!
   try {
     const q = req.query as Record<string, unknown>
-    const { range, error } = resolveRange(q)
-    if (error) return res.status(400).json({ error })
-
-    const where: Prisma.TransactionWhereInput = { userId }
-    if (range) where.date = range
-
-    const type = cleanText(q.type)
-    if (type && type !== 'ALL') {
-      if (!isValidType(type)) return res.status(400).json({ error: 'Choose Expense or Income.' })
-      where.type = type
-    }
-
-    const categoryId = cleanText(q.categoryId)
-    if (categoryId) {
-      const parsed = parseCategoryId(categoryId)
-      if (parsed === null) return res.status(400).json({ error: 'Invalid categoryId.' })
-      where.categoryId = parsed
-    }
-
-    if (q.accountId !== undefined && q.accountId !== '') {
-      if (typeof q.accountId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(q.accountId))
-        return res.status(400).json({ error: 'Invalid accountId.' })
-      const account = await prisma.account.findFirst({
-        where: { id: q.accountId, userId, isGoal: false }
-      })
-      if (!account) return res.status(404).json({ error: 'Account not found.' })
-      if (account.isMain) where.AND = [{ OR: [{ accountId: account.id }, { accountId: null }] }]
-      else where.accountId = account.id
-    }
-
-    if (q.tagId !== undefined && q.tagId !== '') {
-      if (typeof q.tagId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(q.tagId))
-        return res.status(400).json({ error: 'Invalid tagId.' })
-      const ref = await prisma.tagReference.findFirst({ where: { id: q.tagId, tag: { userId } } })
-      where.tags = { some: { tagId: ref?.tagId ?? q.tagId, tag: { userId } } }
-    }
-
-    let minAmount: number | undefined
-    if (q.min !== undefined && q.min !== '') {
-      const min = toCentsNonNegative(q.min)
-      if (min === null) return res.status(400).json({ error: 'Invalid "min" amount.' })
-      minAmount = min
-      where.amount = { ...(where.amount as object), gte: min }
-    }
-    if (q.max !== undefined && q.max !== '') {
-      const max = toCentsNonNegative(q.max)
-      if (max === null) return res.status(400).json({ error: 'Invalid "max" amount.' })
-      // Two contradictory bounds would silently return nothing.
-      if (minAmount !== undefined && max < minAmount) {
-        return res.status(400).json({ error: '"max" must be greater than or equal to "min".' })
-      }
-      where.amount = { ...(where.amount as object), lte: max }
-    }
-
-    const search = cleanText(q.search)
-    if (search.length > MAX_SEARCH_LENGTH) {
-      return res
-        .status(400)
-        .json({ error: `Search must be at most ${MAX_SEARCH_LENGTH} characters.` })
-    }
-    if (search) {
-      where.OR = [
-        { description: { contains: search } },
-        { category: { name: { contains: search } } }
-      ]
-    }
+    const where = await transactionFilters(userId, q)
+    const historyWhere = { ...where }
+    delete historyWhere.date
 
     // Default order is by the movement date, newest first; id breaks ties.
     const sortBy = SORT_FIELDS.includes(q.sortBy as (typeof SORT_FIELDS)[number])
@@ -637,7 +578,7 @@ router.get('/transactions', async (req: AuthRequest, res) => {
     // The count and the page used to be two sequential round trips. They are
     // independent unless the requested page is past the end, because only then
     // does the clamped offset change the read.
-    const [total, firstPage] = await Promise.all([
+    const [total, firstPage, history] = await Promise.all([
       prisma.transaction.count({ where }),
       prisma.transaction.findMany({
         where,
@@ -645,7 +586,8 @@ router.get('/transactions', async (req: AuthRequest, res) => {
         orderBy,
         skip: (requestedPage - 1) * perPage,
         take: perPage
-      })
+      }),
+      prisma.transaction.aggregate({ where: historyWhere, _min: { date: true } })
     ])
 
     // Clamp instead of returning an empty page beyond the last one.
@@ -669,7 +611,8 @@ router.get('/transactions', async (req: AuthRequest, res) => {
       total,
       page,
       perPage,
-      totalPages
+      totalPages,
+      earliestDate: history._min.date ? dayKey(history._min.date) : null
     })
   } catch (error) {
     if (error instanceof FinanceError)
@@ -803,6 +746,7 @@ router.post('/transactions', async (req: AuthRequest, res) => {
         const v = await validateTransactionInput(userId, req.body ?? {}, db, res.locals.today)
         if (v.error) throw new FinanceError(v.error)
 
+        const previousFunds = await captureFunds(userId, [v.accountId], db)
         const tx = await db.transaction.create({
           data: {
             accountId: v.accountId!,
@@ -820,7 +764,7 @@ router.post('/transactions', async (req: AuthRequest, res) => {
           },
           include: { category: true, account: true, ...tagInclude }
         })
-        await requireFunds(userId, [v.accountId], db)
+        await requireFunds(userId, [v.accountId], db, previousFunds)
         return serializeTransaction(tx)
       }
     )
@@ -886,6 +830,7 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
           res.locals.today
         )
         if (v.error) return { status: 400, error: v.error }
+        const previousFunds = await captureFunds(userId, [existing.accountId, v.accountId], db)
         const tx = await db.transaction.update({
           where: { id: txId },
           data: {
@@ -903,7 +848,7 @@ router.put('/transactions/:id', async (req: AuthRequest, res) => {
           },
           include: { category: true, account: true, ...tagInclude }
         })
-        await requireFunds(userId, [existing.accountId, v.accountId], db)
+        await requireFunds(userId, [existing.accountId, v.accountId], db, previousFunds)
         return { tx, syncStatus: 'applied' }
       },
       async (db, original) => {
@@ -940,8 +885,9 @@ router.delete('/transactions/:id', async (req: AuthRequest, res) => {
     await financialWrite(userId, `movement:delete:${txId}`, async db => {
       const existing = await db.transaction.findFirst({ where: { id: txId, userId } })
       if (!existing) throw new FinanceError('Transaction not found.', 404)
+      const previousFunds = await captureFunds(userId, [existing.accountId], db)
       await db.transaction.delete({ where: { id: txId } })
-      await requireFunds(userId, [existing.accountId], db)
+      await requireFunds(userId, [existing.accountId], db, previousFunds)
       return { success: true }
     })
     invalidateRecurring(userId)
@@ -1029,11 +975,8 @@ function validateCategoryInput(body: Record<string, unknown>): {
   type?: TxType
   color?: string | null
 } {
-  const name = cleanText(body.name)
-  if (!name) return { error: 'Category name is required.' }
-  if (name.length > MAX_CATEGORY_NAME_LENGTH) {
-    return { error: `Category name must be at most ${MAX_CATEGORY_NAME_LENGTH} characters.` }
-  }
+  const name = catalogName(body.name, MAX_CATEGORY_NAME_LENGTH)
+  if (!name) return { error: `Category name must contain 1–60 characters. ${catalogNameError}` }
   if (!isValidType(body.type)) return { error: 'Choose Expense or Income.' }
 
   const rawColor = body.color

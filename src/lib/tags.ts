@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from './prisma'
+import { catalogName } from './catalogNames'
 
 export const tagInclude = { tags: { include: { tag: true } } } as const
 export function commentInput(body: Record<string, unknown>): string | null {
@@ -8,9 +9,7 @@ export function commentInput(body: Record<string, unknown>): string | null {
   return typeof value === 'string' && value.trim().length <= 200 ? value.trim() : null
 }
 export function tagName(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const name = value.trim().normalize('NFC')
-  return Array.from(name).length >= 1 && Array.from(name).length <= 20 ? name : null
+  return catalogName(value, 20)
 }
 export function validTagId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value)

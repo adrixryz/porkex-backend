@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { prisma } from '../lib/prisma'
 import type { AuthRequest } from '../middleware/auth'
 import { tagName, validTagId } from '../lib/tags'
+import { catalogNameError } from '../lib/catalogNames'
 import { isUniqueViolation } from '../lib/errors'
 
 export const tagsRouter = Router()
@@ -31,9 +32,9 @@ tagsRouter.post('/', async (req: AuthRequest, res, next) => {
   const name = tagName(req.body?.name)
   const id = req.body?.id
   if (!name || !validTagId(id))
-    return res
-      .status(400)
-      .json({ error: 'A stable tag id and a name of 1–20 characters are required.' })
+    return res.status(400).json({
+      error: `A stable tag id and a name of 1–20 characters are required. ${catalogNameError}`
+    })
   const userId = req.userId!
   try {
     const tag = await prisma.$transaction(async db => {
@@ -108,7 +109,10 @@ tagsRouter.put('/order', async (req: AuthRequest, res, next) => {
 })
 tagsRouter.put('/:id', async (req: AuthRequest, res, next) => {
   const name = tagName(req.body?.name)
-  if (!name) return res.status(400).json({ error: 'Tag name must contain 1–20 characters.' })
+  if (!name)
+    return res
+      .status(400)
+      .json({ error: `Tag name must contain 1–20 characters. ${catalogNameError}` })
   try {
     const ref = await prisma.tagReference.findFirst({
       where: { id: String(req.params.id), tag: { userId: req.userId! } }

@@ -2,11 +2,20 @@ import { Router } from 'express'
 import { randomUUID } from 'node:crypto'
 import type { AuthRequest } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
-import { accountList, balance, financialWrite, FinanceError, requireFunds } from '../lib/finance'
+import {
+  accountList,
+  balance,
+  financialWrite,
+  FinanceError,
+  requireFunds,
+  captureFunds,
+  assertAccountNameAvailable
+} from '../lib/finance'
 import { fromCents, toCents, toCentsNonNegative } from '../lib/money'
 import { parseDay, todayInZone } from '../lib/dates'
 import { acceptFinancialEdit } from '../lib/financialEdits'
 import { accountHistory } from '../lib/accountHistory'
+import { catalogName, catalogNameError } from '../lib/catalogNames'
 import { invalidateRecurring } from '../lib/recurring'
 
 export const accountsRouter = Router()
@@ -59,10 +68,6 @@ accountsRouter.get('/dashboard/summary', async (req: AuthRequest, res) => {
 })
 const validId = (id: unknown): id is string =>
   typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id)
-const nameOf = (name: unknown) =>
-  typeof name === 'string' && name.trim().length > 0 && name.trim().length <= 60
-    ? name.trim()
-    : null
 const failure = (res: import('express').Response, error: unknown) => {
   if (!(error instanceof FinanceError)) console.error('Financial operation failed.', error)
   return res.status(error instanceof FinanceError ? error.status : 500).json({
@@ -86,10 +91,12 @@ accountsRouter.post('/accounts', async (req: AuthRequest, res) => {
       id = body.id ?? body.clientId ?? randomUUID()
     if (!validId(id)) throw new FinanceError('Invalid account ID.')
     const result = await financialWrite(userId, `account:create:${id}`, async db => {
-      const name = nameOf(body.name),
+      const name = catalogName(body.name, 60),
         openingBalance = toCentsNonNegative(body.openingBalance ?? 0)
-      if (!name || openingBalance === null)
-        throw new FinanceError('Enter a name and a nonnegative opening balance.')
+      if (!name)
+        throw new FinanceError(`Account name must contain 1–60 characters. ${catalogNameError}`)
+      if (openingBalance === null) throw new FinanceError('Enter a nonnegative opening balance.')
+      await assertAccountNameAvailable(userId, name, db)
       const row = await db.account.create({ data: { id, name, openingBalance, userId } })
       if (openingBalance > 0)
         await db.balanceAdjustment.create({
@@ -141,7 +148,10 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
         const row = await db.account.findFirst({ where: { id, userId } })
         if (!row || row.isGoal) throw new FinanceError('Account not found.', 404)
         const editedAt = await acceptFinancialEdit(db, userId, `account:${id}`, body)
-        const name = nameOf(body.name ?? row.name)
+        const name = catalogName(body.name ?? row.name, 60)
+        if (!name)
+          throw new FinanceError(`Account name must contain 1–60 characters. ${catalogNameError}`)
+        await assertAccountNameAvailable(userId, name, db, id)
         const previousBalance = await balance(userId, id, db)
         let openingBalance = row.openingBalance
         if (body.balance !== undefined) {
@@ -176,7 +186,7 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
             'Empty the account and pause its recurring rules before archiving.',
             409
           )
-        await requireFunds(userId, [id], db)
+        await requireFunds(userId, [id], db, new Map([[id, previousBalance]]))
         const currentBalance = await balance(userId, id, db)
         if (currentBalance !== previousBalance)
           await db.balanceAdjustment.create({
@@ -290,11 +300,12 @@ for (const method of ['put', 'delete'] as const)
           const previousBalance = entry.previousBalance
           const delta = method === 'put' ? desired! - oldBalance : previousBalance - oldBalance
           if (account) {
+            const previousFunds = await captureFunds(userId, [account.id], db)
             const openingBalance = account.openingBalance + delta
             if (!Number.isSafeInteger(openingBalance) || Math.abs(openingBalance) > 2_147_483_647)
               throw new FinanceError('This adjustment exceeds the supported range.')
             await db.account.update({ where: { id: account.id }, data: { openingBalance } })
-            await requireFunds(userId, [account.id], db)
+            await requireFunds(userId, [account.id], db, previousFunds)
           }
           if (method === 'delete')
             await db.balanceAdjustment.delete({ where: { userId_id: { userId, id } } })
@@ -398,8 +409,9 @@ for (const method of ['post', 'put', 'delete'] as const)
               }
             }
             if (method === 'delete') {
+              const before = await captureFunds(userId, [old!.sourceId, old!.destinationId], db)
               await db.transfer.delete({ where: { id } })
-              await requireFunds(userId, [old!.sourceId, old!.destinationId], db)
+              await requireFunds(userId, [old!.sourceId, old!.destinationId], db, before)
               await checkGoalTargets()
               return { success: true }
             }
@@ -432,6 +444,11 @@ for (const method of ['post', 'put', 'delete'] as const)
               date,
               comment: body.comment.trim()
             }
+            const before = await captureFunds(
+              userId,
+              [sourceId, destinationId, ...(old ? [old.sourceId, old.destinationId] : [])],
+              db
+            )
             const row =
               method === 'post'
                 ? await db.transfer.create({ data: { id, ...data } })
@@ -439,7 +456,8 @@ for (const method of ['post', 'put', 'delete'] as const)
             await requireFunds(
               userId,
               [sourceId, destinationId, ...(old ? [old.sourceId, old.destinationId] : [])],
-              db
+              db,
+              before
             )
             await checkGoalTargets()
             return { ...row, amount: fromCents(row.amount) }
@@ -492,9 +510,11 @@ for (const method of ['post', 'put', 'delete'] as const)
               return { success: true }
             }
             if (old?.archived) throw new FinanceError('The goal is archived.', 409)
-            const name = nameOf(body.name),
+            const name = catalogName(body.name, 60),
               targetAmount = toCents(body.targetAmount)
-            if (!name || targetAmount === null)
+            if (!name)
+              throw new FinanceError(`Goal name must contain 1–60 characters. ${catalogNameError}`)
+            if (targetAmount === null)
               throw new FinanceError(
                 'Enter a goal name and positive target with up to two decimals.'
               )
@@ -503,6 +523,7 @@ for (const method of ['post', 'put', 'delete'] as const)
                 'The target cannot be lower than the amount already saved.',
                 409
               )
+            await assertAccountNameAvailable(userId, name, db, old?.id)
             const row =
               method === 'post'
                 ? await db.account.create({

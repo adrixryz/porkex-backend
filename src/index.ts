@@ -52,7 +52,11 @@ if (CORS_ORIGINS.length > 0) {
   console.log('CORS_ORIGINS is not set: no cross-origin access allowed (fine for development).')
 }
 
-app.use(express.json())
+app.use((req, res, next) => {
+  if (/^\/api\/transactions\/import(?:\/preview)?$/.test(req.path) && req.method === 'POST')
+    return next()
+  express.json()(req, res, next)
+})
 
 // Liveness probe for the hosting platform and uptime monitors. "The port
 // answers" alone would miss the failure that actually happens — the database
