@@ -88,6 +88,15 @@ occurrencesRouter.put('/:ruleId/occurrences/:day', async (req: AuthRequest, res,
             error:
               'Provide a valid amount, category of the same type, optional comment and 0–5 tags.'
           }
+        if (
+          amount === rule.amount &&
+          comment === rule.description &&
+          category.id === rule.categoryId &&
+          tagIds.length === 0
+        ) {
+          await db.occurrenceOverride.deleteMany({ where: { ruleId, date, processedAt: null } })
+          return { status: 200, success: true }
+        }
         const data = {
           kind,
           amount,

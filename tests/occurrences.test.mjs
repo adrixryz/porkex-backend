@@ -36,6 +36,28 @@ await withServer('occurrences', async ctx => {
   )
   const editRule = await create()
   const editPath = `/recurring/${editRule.id}/occurrences/${day(1)}`
+  await request('PUT', editPath, { kind: 'EDIT', amount: 12, categoryId: expense.id })
+  assert.equal(
+    (await request('GET', '/recurring')).find(row => row.id === editRule.id).nextException.amount,
+    12
+  )
+  await request('PUT', editPath, { kind: 'EDIT', amount: 10, categoryId: expense.id })
+  assert.equal(
+    (await request('GET', '/recurring')).find(row => row.id === editRule.id).nextException,
+    null,
+    'Restoring all original values clears the next-only notice'
+  )
+  await request('PUT', editPath, {
+    kind: 'EDIT',
+    amount: 10,
+    categoryId: expense.id,
+    comment: 'Different comment'
+  })
+  assert.equal(
+    (await request('GET', '/recurring')).find(row => row.id === editRule.id).nextException.comment,
+    'Different comment',
+    'Same amount with a real change retains the notice'
+  )
   await request('POST', '/tags', { id: 'occurrence-tag', name: 'Once' }, 201)
   const edit = {
     kind: 'EDIT',

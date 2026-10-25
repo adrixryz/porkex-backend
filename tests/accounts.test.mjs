@@ -28,7 +28,7 @@ await withServer('accounts', async ctx => {
     sourceId: main,
     destinationId,
     amount: 40,
-    date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' }),
+    date: new Date().toISOString().slice(0, 10),
     comment: ''
   }
   await call('POST', '/transfers', transfer, 201)
@@ -63,7 +63,7 @@ await withServer('accounts', async ctx => {
   await call('POST', '/transfers', { ...transfer, id: randomUUID(), amount: 1 }, 409)
   await call('PUT', `/accounts/${destinationId}`, { archived: true, openingBalance: 1 }, 409)
   assert.equal((await call('GET', '/accounts')).find(a => a.id === destinationId).archived, false)
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' })
+  const today = new Date().toISOString().slice(0, 10)
   const rule = await call(
     'POST',
     '/recurring',

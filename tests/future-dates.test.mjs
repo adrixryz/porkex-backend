@@ -1,10 +1,9 @@
 import { withServer } from './helpers.mjs'
 
 // Dates are calendar days: the client sends 'YYYY-MM-DD' and the server stores
-// UTC midnight of that day. The tests mirror that, using the local calendar day
-// (what the browser would send).
+// UTC midnight of that day. This suite uses the harness's explicit UTC zone.
 const pad2 = n => String(n).padStart(2, '0')
-const localDay = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+const localDay = d => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`
 
 await withServer('future-dates', async ({ call, check, state }) => {
   let r = await call('POST', '/auth/register', { name: 'F', email: 'f@f.com', password: 'secret1' })
@@ -35,7 +34,7 @@ await withServer('future-dates', async ({ call, check, state }) => {
   // The guard allows up to UTC today + 1 day so a client in any timezone fits;
   // +3 days is in the future everywhere.
   const in3days = new Date(today)
-  in3days.setDate(in3days.getDate() + 3)
+  in3days.setUTCDate(in3days.getUTCDate() + 3)
   r = await call('POST', '/api/transactions', {
     amount: 10,
     type: 'Expense',
@@ -52,7 +51,9 @@ await withServer('future-dates', async ({ call, check, state }) => {
 
   // A full ISO timestamp (an older queued write) still works, and is
   // normalized to the UTC calendar day it falls on.
-  const earlierToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12, 5)
+  const earlierToday = new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 12, 5)
+  )
   r = await call('POST', '/api/transactions', {
     amount: 10,
     type: 'Expense',
@@ -77,7 +78,7 @@ await withServer('future-dates', async ({ call, check, state }) => {
   check('PUT con fecha de hoy sigue permitido', r.status === 200, r.data?.error)
 
   // ── el saldo de la analítica cuadra con el total real ──
-  const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 10)
+  const lastMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 10))
   await call('POST', '/api/transactions', {
     amount: 100,
     type: 'Income',

@@ -243,7 +243,7 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
       take: 8
     })
 
-    const [incomeSum, expenseSum, transactionCount] = await Promise.all([
+    const [incomeSum, expenseSum, transactionCount, history] = await Promise.all([
       prisma.transaction.aggregate({
         _sum: { amount: true },
         where: { ...periodWhere, type: 'Income' }
@@ -252,7 +252,8 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
         _sum: { amount: true },
         where: { ...periodWhere, type: 'Expense' }
       }),
-      prisma.transaction.count({ where: periodWhere })
+      prisma.transaction.count({ where: periodWhere }),
+      prisma.transaction.aggregate({ where, _min: { date: true } })
     ])
 
     const movementsByCategory = await prisma.transaction.groupBy({
@@ -301,6 +302,7 @@ router.get('/dashboard', async (req: AuthRequest, res) => {
       totalIncome: fromCents(totalIncome),
       totalExpense: fromCents(totalExpense),
       transactionCount,
+      earliestDate: history._min.date ? dayKey(history._min.date) : null,
       recentTransactions: transactions.map(serializeTransaction),
       pieChartData,
       incomePieChartData
@@ -1512,6 +1514,8 @@ function parseInterval(v: unknown): number | null {
 function serializeRule<
   T extends {
     amount: number
+    description: string
+    categoryId: number
     lastProcessedDate?: Date | null
     nextDate?: Date
     exceptions?: {
@@ -1524,7 +1528,14 @@ function serializeRule<
   }
 >(rule: T) {
   const { lastProcessedDate: _cursor, exceptions, ...visible } = rule
-  const exception = exceptions?.find(item => item.date.getTime() === rule.nextDate?.getTime())
+  const exception = exceptions?.find(
+    item =>
+      item.date.getTime() === rule.nextDate?.getTime() &&
+      ((item.amount ?? rule.amount) !== rule.amount ||
+        (item.comment ?? rule.description) !== rule.description ||
+        (item.categoryId ?? rule.categoryId) !== rule.categoryId ||
+        item.tags.length > 0)
+  )
   void _cursor
   return {
     ...visible,

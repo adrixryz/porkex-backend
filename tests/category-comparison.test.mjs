@@ -96,11 +96,55 @@ await withServer('category-comparison', async ctx => {
   )
   assert.equal(Math.round(spending.reduce((sum, row) => sum + row.value, 0) * 100), 2530)
   assert.ok(spending.every(row => row.value > 0 && Number.isFinite(row.percent)))
-  for (const query of ['mode=day', 'today=2024-02-30', 'weekStart=UNKNOWN'])
+  const daily = await load('day')
+  assert.equal(daily.ranges.current.from, '2024-03-06')
+  assert.equal(daily.ranges.current.to, '2024-03-06')
+  assert.equal(daily.ranges.previous.from, '2024-03-05')
+  assert.equal(daily.ranges.previous.to, '2024-03-05')
+  assert.equal(daily.categoryComparison.find(row => row.name === 'Food').current, 0.2)
+  assert.equal(daily.categoryComparison.find(row => row.name === 'Entertainment').previous, 10)
+  const incomeDaily = await ctx.call(
+    'GET',
+    '/api/analytics/category-comparison?mode=day&type=Income&today=2024-03-06'
+  )
+  assert.equal(incomeDaily.status, 200)
+  assert.equal(incomeDaily.data.type, 'Income')
+  assert.equal(incomeDaily.data.categoryComparison.length, 1)
+  assert.equal(incomeDaily.data.categoryComparison[0].name, income.name)
+  assert.equal(incomeDaily.data.categoryComparison[0].current, 1000)
+  assert.equal(incomeDaily.data.categoryComparison[0].previous, 0)
+  assert.equal(incomeDaily.data.categoryComparison[0].changePercent, null)
+  for (const [mode, anchor, from, to, previousFrom, previousTo] of [
+    ['day', '2024-02-29', '2024-02-29', '2024-02-29', '2024-02-28', '2024-02-28'],
+    ['week', '2024-02-26', '2024-02-26', '2024-03-03', '2024-02-19', '2024-02-25'],
+    ['month', '2024-02-01', '2024-02-01', '2024-02-29', '2024-01-01', '2024-01-31'],
+    ['year', '2023-01-01', '2023-01-01', '2023-12-31', '2022-01-01', '2022-12-31']
+  ]) {
+    const historical = await ctx.call(
+      'GET',
+      `/api/analytics/category-comparison?mode=${mode}&today=2024-03-06&anchor=${anchor}`
+    )
+    assert.equal(historical.status, 200)
+    assert.equal(historical.data.anchor, anchor)
+    assert.equal(historical.data.partial, false)
+    assert.deepEqual(historical.data.ranges, {
+      current: { from, to },
+      previous: { from: previousFrom, to: previousTo }
+    })
+    assert.ok(historical.data.categoryComparison.length > 0)
+  }
+  for (const query of [
+    'mode=quarter',
+    'type=Transfer',
+    'today=2024-02-30',
+    'weekStart=UNKNOWN',
+    'today=2024-03-06&anchor=2024-03-07',
+    'anchor=2024-02-30'
+  ])
     assert.equal((await ctx.call('GET', '/api/analytics/category-comparison?' + query)).status, 400)
   await createTestUser(ctx, 'category-comparison-other@example.com')
   assert.deepEqual((await load('year')).categoryComparison, [])
   console.log(
-    'PASS category comparison: month/week/year, partial ranges, cents, absent categories, zero bases and account isolation'
+    'PASS category comparison: day/week/month/year, income/expense, partial ranges, cents, absent categories, zero bases and account isolation'
   )
 })

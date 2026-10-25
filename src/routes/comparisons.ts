@@ -7,6 +7,7 @@ export const comparisonsRouter = Router()
 const weekDays = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY']
 comparisonsRouter.get('/category-comparison', async (req: AuthRequest, res, next) => {
   const mode = req.query.mode ?? 'month'
+  const type = req.query.type ?? 'Expense'
   const today =
     req.query.today === undefined
       ? (res.locals.today as Date)
@@ -14,27 +15,58 @@ comparisonsRouter.get('/category-comparison', async (req: AuthRequest, res, next
         ? parseDay(req.query.today)
         : null
   const weekStart = weekDays.indexOf(String(req.query.weekStart ?? 'MONDAY'))
-  if (!['month', 'week', 'year'].includes(String(mode)) || !today || weekStart < 0)
-    return res.status(400).json({ error: 'Provide a valid mode, today and weekStart.' })
-  const ranges = comparisonRanges(mode as 'month' | 'week' | 'year', today, today, weekStart)!
+  const anchor =
+    req.query.anchor === undefined
+      ? today
+      : isDayString(req.query.anchor)
+        ? parseDay(req.query.anchor)
+        : null
+  if (typeof type !== 'string' || !['Income', 'Expense'].includes(type))
+    return res.status(400).json({ error: 'Choose Expense or Income.' })
+  if (
+    typeof mode !== 'string' ||
+    !['day', 'month', 'week', 'year'].includes(mode) ||
+    !today ||
+    !anchor ||
+    weekStart < 0
+  )
+    return res.status(400).json({ error: 'Provide a valid mode, anchor, today and weekStart.' })
+  if (anchor > today)
+    return res.status(400).json({ error: 'The comparison period cannot start in the future.' })
+  const ranges =
+    mode === 'day'
+      ? {
+          currentStart: anchor,
+          currentEnd: addDays(anchor, 1),
+          previousStart: addDays(anchor, -1),
+          previousEnd: anchor,
+          partial: false
+        }
+      : comparisonRanges(mode as 'month' | 'week' | 'year', anchor, today, weekStart)!
   try {
-    const rows = await prisma.transaction.findMany({
-      where: {
-        userId: req.userId!,
-        type: 'Expense',
-        OR: [
-          { date: { gte: ranges.currentStart, lt: ranges.currentEnd } },
-          { date: { gte: ranges.previousStart, lt: ranges.previousEnd } }
-        ]
-      },
-      select: {
-        amount: true,
-        date: true,
-        category: { select: { id: true, name: true, color: true } }
-      }
-    })
+    const [rows, history] = await Promise.all([
+      prisma.transaction.findMany({
+        where: {
+          userId: req.userId!,
+          type: String(type),
+          OR: [
+            { date: { gte: ranges.currentStart, lt: ranges.currentEnd } },
+            { date: { gte: ranges.previousStart, lt: ranges.previousEnd } }
+          ]
+        },
+        select: {
+          amount: true,
+          date: true,
+          category: { select: { id: true, name: true, color: true } }
+        }
+      }),
+      prisma.transaction.aggregate({ where: { userId: req.userId!, type }, _min: { date: true } })
+    ])
     res.json({
       mode,
+      type,
+      anchor: dayKey(anchor),
+      earliestDate: history._min.date ? dayKey(history._min.date) : null,
       partial: ranges.partial,
       ranges: {
         current: { from: dayKey(ranges.currentStart), to: dayKey(addDays(ranges.currentEnd, -1)) },
