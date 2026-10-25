@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { createClient } from '@libsql/client'
 import migrationsApi from '../scripts/lib/migrations.js'
 import { PrismaClient } from '@prisma/client'
-import { PrismaLibSQL } from '@prisma/adapter-libsql'
+import { createPrismaAdapter } from '../scripts/lib/prisma-adapter.js'
 
 const { loadMigrations, describe, sameSchema, buildReference, checkPrismaSchema, runMigrations } =
   migrationsApi
@@ -172,7 +172,7 @@ try {
   }
 
   const reader = new PrismaClient({
-    adapter: new PrismaLibSQL(
+    adapter: createPrismaAdapter(
       createClient({ url: `file:${join(temporary, 'test-2.db').replace(/\\/g, '/')}` })
     )
   })
@@ -250,7 +250,7 @@ try {
     const wrongSchema = join(temporary, 'wrong.prisma')
     writeFileSync(
       wrongSchema,
-      'datasource db {\n provider = "sqlite"\n url = env("DATABASE_URL")\n}\nmodel Wrong {\n id Int @id\n}\n'
+      'datasource db {\n provider = "sqlite"\n}\nmodel Wrong {\n id Int @id\n}\n'
     )
     await assert.rejects(
       checkPrismaSchema(expected.versions.at(-1), wrongSchema),

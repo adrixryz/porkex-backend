@@ -11,7 +11,7 @@
 //     Prints how many movements the rule has generated, without triggering the
 //     API's catch-up (which any HTTP call would).
 import { PrismaClient } from '@prisma/client'
-import { PrismaLibSQL } from '@prisma/adapter-libsql'
+import { createPrismaAdapter } from '../scripts/lib/prisma-adapter.js'
 import { createClient } from '@libsql/client'
 
 const [, , command, url, id, extra] = process.argv
@@ -22,7 +22,7 @@ if (!command || !url || !id) {
 }
 
 const raw = createClient({ url })
-const db = new PrismaClient({ adapter: new PrismaLibSQL(raw) })
+const db = new PrismaClient({ adapter: createPrismaAdapter(raw) })
 
 if (command === 'age') {
   const [y, m, d] = (extra ?? '').split('-').map(Number)

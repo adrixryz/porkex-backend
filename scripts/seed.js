@@ -20,7 +20,7 @@
 // prisma/dev.db and running it on Render fills Turso. Only the account named by
 // SEED_EMAIL is ever touched.
 const { PrismaClient } = require('@prisma/client')
-const { PrismaLibSQL } = require('@prisma/adapter-libsql')
+const { createPrismaAdapter } = require('./lib/prisma-adapter')
 const { randomUUID } = require('node:crypto')
 const { spawnSync } = require('node:child_process')
 const path = require('node:path')
@@ -41,7 +41,7 @@ async function recreateSchema(client) {
       'migrate',
       'diff',
       '--from-empty',
-      '--to-schema-datamodel',
+      '--to-schema',
       path.join(__dirname, '..', 'prisma', 'schema.prisma'),
       '--script'
     ],
@@ -589,7 +589,7 @@ async function main() {
       console.log('Recreating all Porkex tables for disposable test data.')
       await recreateSchema(client)
     }
-    prisma = new PrismaClient({ adapter: new PrismaLibSQL(client) })
+    prisma = new PrismaClient({ adapter: createPrismaAdapter(client) })
     console.log(`Seeding ${CONFIG.email} with ${CONFIG.months} months of data (${CONFIG.timeZone})`)
     console.log(
       `  window: ${startDate.toISOString().slice(0, 10)} -> ${day.toISOString().slice(0, 10)}`

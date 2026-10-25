@@ -6,7 +6,7 @@ The interface is maintained in [porkex-web-app](https://github.com/adrixryz/pork
 
 ## Run locally
 
-Use Node 24+. Copy [.env.example](.env.example) to `.env`, keep the local database URL and replace `JWT_SECRET` with a long random secret.
+Use Node 26.12.1 (see `.node-version`), or a compatible patched Node 24.22.1+. Copy [.env.example](.env.example) to `.env`, keep the local database URL and replace `JWT_SECRET` with a long random secret.
 
 ```bash
 npm ci

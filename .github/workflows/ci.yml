@@ -21,19 +21,19 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           path: porkex-backend
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           repository: adrixryz/porkex-web-app
           ref: ${{ inputs.counterpart_ref || 'main' }}
           path: porkex-web-app
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 24
+          node-version: 26.12.1
           cache: npm
           cache-dependency-path: |
             porkex-web-app/package-lock.json
@@ -51,7 +51,7 @@ jobs:
         working-directory: porkex-web-app
         env:
           TURSO_AUTH_TOKEN: ''
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: failure()
         with:
           name: integration-traces
@@ -69,11 +69,11 @@ jobs:
       TURSO_AUTH_TOKEN: ''
       JWT_SECRET: ci-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 24
+          node-version: 26.12.1
           cache: npm
 
       # npm ci runs the postinstall hook, which generates the Prisma client.

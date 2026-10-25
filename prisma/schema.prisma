@@ -2,12 +2,10 @@ generator client {
   provider        = "prisma-client-js"
   // Lets the app talk to the database through a driver adapter, which is what
   // makes a hosted libSQL/Turso URL work with the same schema. See src/lib/prisma.ts.
-  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
 }
 
 model User {

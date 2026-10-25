@@ -131,7 +131,7 @@ async function checkPrismaSchema(
       'migrate',
       'diff',
       '--from-empty',
-      '--to-schema-datamodel',
+      '--to-schema',
       schemaPath,
       '--script'
     ],

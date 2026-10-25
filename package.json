@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "src/index.ts",
   "engines": {
-    "node": ">=24"
+    "node": "^24.22.1 || >=26.12.1"
   },
   "scripts": {
     "dev": "node --watch -r ts-node/register/transpile-only src/index.ts",
@@ -26,29 +26,28 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@libsql/client": "^0.8.1",
-    "@prisma/adapter-libsql": "^5.22.0",
-    "@prisma/client": "^5.10.2",
+    "@libsql/client": "^0.18.0",
+    "@prisma/adapter-libsql": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "bcryptjs": "^3.0.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.18.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "jsonwebtoken": "^9.0.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/bcryptjs": "^2.4.6",
-    "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^20.11.24",
-    "eslint": "^10.12.0",
+    "@types/node": "^26.6.5",
+    "eslint": "^10.13.0",
     "prettier": "^3.9.10",
-    "prisma": "^5.10.2",
+    "prisma": "^7.10.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3",
-    "typescript-eslint": "^8.71.2"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.0"
   },
   "overrides": {
     "qs": "^6.16.1"

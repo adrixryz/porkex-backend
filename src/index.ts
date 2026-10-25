@@ -18,6 +18,7 @@ assertJwtSecretIsConfigured()
 // The app runs behind a single reverse proxy (Render). Trusting one hop is what
 // makes req.ip the real client address, which the rate limiters key on.
 app.set('trust proxy', 1)
+app.set('query parser', 'extended')
 
 /**
  * Which frontends may call this API, as a comma separated list of origins:

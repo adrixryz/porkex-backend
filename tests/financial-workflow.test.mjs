@@ -73,8 +73,8 @@ try {
       [
         '-e',
         `
-      const {PrismaClient}=require('@prisma/client'); const {PrismaLibSQL}=require('@prisma/adapter-libsql'); const {createClient}=require('@libsql/client');
-      const db=new PrismaClient({adapter:new PrismaLibSQL(createClient({url:process.env.DATABASE_URL}))});
+      const {PrismaClient}=require('@prisma/client'); const {createPrismaAdapter}=require('./scripts/lib/prisma-adapter'); const {createClient}=require('@libsql/client');
+      const db=new PrismaClient({adapter:createPrismaAdapter(createClient({url:process.env.DATABASE_URL}))});
       (async()=>{const row=await db.transaction.findFirst({include:{tags:{include:{tag:true}}}}); const next=await db.occurrenceOverride.findFirst({include:{tags:true}}); console.log(JSON.stringify({comment:row.description,amount:row.amount,tag:row.tags[0].tag.name,overrideAmount:next.amount,overrideTags:next.tags.length,aliases:await db.tagReference.count(),migrations:await db.$queryRawUnsafe('SELECT count(*) AS n FROM _PorkexMigration')},(_,v)=>typeof v==='bigint'?Number(v):v)); await db.$disconnect()})().catch(e=>{console.error(e);process.exitCode=1});
     `
       ],

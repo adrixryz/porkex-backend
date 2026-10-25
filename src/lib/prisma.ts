@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client'
-import { PrismaLibSQL } from '@prisma/adapter-libsql'
+import { createPrismaAdapter } from '../../scripts/lib/prisma-adapter'
 import { createClient, type Client } from '@libsql/client'
 
 // The database is reached through the libSQL driver adapter, which lets the same
@@ -35,7 +35,7 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient; databa
 export const databaseClient = globalForPrisma.databaseClient ?? createDatabaseClient()
 globalForPrisma.databaseClient = databaseClient
 export const prisma =
-  globalForPrisma.prisma ?? new PrismaClient({ adapter: new PrismaLibSQL(databaseClient) })
+  globalForPrisma.prisma ?? new PrismaClient({ adapter: createPrismaAdapter(databaseClient) })
 
 if (!globalForPrisma.prisma) {
   globalForPrisma.prisma = prisma

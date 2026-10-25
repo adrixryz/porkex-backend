@@ -56,11 +56,11 @@ await withServer('seed', async ctx => {
         '-e',
         `
       const {PrismaClient}=require('@prisma/client');
-      const {PrismaLibSQL}=require('@prisma/adapter-libsql');
+      const {createPrismaAdapter}=require('./scripts/lib/prisma-adapter');
       const {createClient}=require('@libsql/client');
       const {createHash}=require('node:crypto');
       const client=createClient({url:process.env.DATABASE_URL});
-      const db=new PrismaClient({adapter:new PrismaLibSQL(client)});
+      const db=new PrismaClient({adapter:createPrismaAdapter(client)});
       (async()=>{${body}})().then(()=>db.$disconnect()).then(()=>client.close()).catch(error=>{console.error(error);process.exitCode=1});
     `
       ],
