@@ -16,6 +16,7 @@ import { categoriesRouter } from './categories'
 import { budgetsRouter } from './budgets'
 import { recurringRouter } from './recurring'
 import { profileRouter } from './profile'
+import { backupRouter } from './backup'
 const router = Router()
 
 // Apply auth middleware to ALL routes in this file
@@ -38,6 +39,7 @@ router.use(async (req: AuthRequest, res, next) => {
 })
 
 router.use(movementCsvRouter)
+router.use(backupRouter)
 router.use(accountsRouter)
 router.use('/favorites', favoritesRouter)
 router.use('/tags', tagsRouter)
