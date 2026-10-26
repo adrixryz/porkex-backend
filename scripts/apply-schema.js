@@ -1,11 +1,6 @@
-// Apply reviewed, checksummed migrations to local SQLite or hosted Turso.
+// Initialize the current disposable development schema on SQLite or Turso.
 const { loadEnvironment, databaseConfig, createClient, safeError } = require('./lib/database')
-const {
-  loadMigrations,
-  buildReference,
-  checkPrismaSchema,
-  runMigrations
-} = require('./lib/migrations')
+const { buildReference, initializeDatabase } = require('./lib/schema')
 
 loadEnvironment()
 
@@ -14,21 +9,20 @@ async function main() {
   if (args.length > 1 || (args.length && args[0] !== '--check')) {
     throw new Error('Usage: npm run db:apply -- [--check]')
   }
-  const migrations = loadMigrations()
-  const reference = await buildReference(migrations)
-  try {
-    await checkPrismaSchema(reference.versions.at(-1))
-  } finally {
-    reference.client.close()
-  }
   if (args[0] === '--check') {
-    console.log('Prisma schema and versioned migrations agree.')
+    const reference = await buildReference()
+    reference.client.close()
+    console.log('The current development schema can be generated from schema.prisma.')
     return
   }
   const client = createClient(databaseConfig({ mustExist: false }))
   try {
-    const result = await runMigrations(client, migrations)
-    console.log('Migrations applied: ' + result.applied + ' new, ' + result.total + ' total.')
+    const result = await initializeDatabase(client)
+    console.log(
+      result.created
+        ? 'Development schema initialized from schema.prisma.'
+        : 'Development schema is already current; data was preserved.'
+    )
   } finally {
     client.close()
   }

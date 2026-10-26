@@ -1,5 +1,5 @@
 // Shared harness for the API tests: spins up a real server against a throwaway
-// SQLite database, exposes a small fetch helper and cleans up afterwards.
+// SQLite database initialized from schema.prisma, exposes a fetch helper and cleans up afterwards.
 //
 // Each test file uses:  await withServer(async (ctx) => { ... })
 import { spawn, spawnSync } from 'node:child_process'
@@ -172,7 +172,7 @@ export async function withServer(name, run, extraEnv = {}) {
     if (!(await waitForServer(base, server))) {
       throw new Error(`Server did not start on port ${port}.\n${logs.join('')}`)
     }
-    await run({ call, check, results, state, base, dbFile })
+    await run({ call, check, results, state, base, dbFile, logs })
   } finally {
     await cleanup()
   }

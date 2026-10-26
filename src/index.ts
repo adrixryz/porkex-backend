@@ -7,7 +7,7 @@ import authRoutes from './routes/auth'
 import { assertJwtSecretIsConfigured } from './middleware/auth'
 import { apiLimiter, authLimiter } from './middleware/rateLimit'
 import { prisma, databaseClient } from './lib/prisma'
-import { checkDatabaseSchema } from '../scripts/lib/migrations'
+import { checkDatabaseSchema } from '../scripts/lib/schema'
 
 const app = express()
 const port = process.env.PORT || 3000

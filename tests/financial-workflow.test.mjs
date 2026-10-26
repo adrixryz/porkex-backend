@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { withServer, createTestUser } from './helpers.mjs'
-import migrationsApi from '../scripts/lib/migrations.js'
+import schemaApi from '../scripts/lib/schema.js'
 
 const output = mkdtempSync(join(tmpdir(), 'porkex-financial-backup-'))
 try {
@@ -75,7 +75,7 @@ try {
         `
       const {PrismaClient}=require('@prisma/client'); const {createPrismaAdapter}=require('./scripts/lib/prisma-adapter'); const {createClient}=require('@libsql/client');
       const db=new PrismaClient({adapter:createPrismaAdapter(createClient({url:process.env.DATABASE_URL}))});
-      (async()=>{const row=await db.transaction.findFirst({include:{tags:{include:{tag:true}}}}); const next=await db.occurrenceOverride.findFirst({include:{tags:true}}); console.log(JSON.stringify({comment:row.description,amount:row.amount,tag:row.tags[0].tag.name,overrideAmount:next.amount,overrideTags:next.tags.length,aliases:await db.tagReference.count(),migrations:await db.$queryRawUnsafe('SELECT count(*) AS n FROM _PorkexMigration')},(_,v)=>typeof v==='bigint'?Number(v):v)); await db.$disconnect()})().catch(e=>{console.error(e);process.exitCode=1});
+      (async()=>{const row=await db.transaction.findFirst({include:{tags:{include:{tag:true}}}}); const next=await db.occurrenceOverride.findFirst({include:{tags:true}}); console.log(JSON.stringify({comment:row.description,amount:row.amount,tag:row.tags[0].tag.name,overrideAmount:next.amount,overrideTags:next.tags.length,aliases:await db.tagReference.count(),schema:await db.$queryRawUnsafe('SELECT fingerprint FROM _PorkexDevelopmentSchema WHERE id=1')},(_,v)=>typeof v==='bigint'?Number(v):v)); await db.$disconnect()})().catch(e=>{console.error(e);process.exitCode=1});
     `
       ],
       { env: { ...env, DATABASE_URL: `file:${backup.replace(/\\/g, '/')}` }, encoding: 'utf8' }
@@ -100,7 +100,7 @@ try {
         aliases: 2
       }
     )
-    assert.equal(saved.migrations[0].n, migrationsApi.loadMigrations().length)
+    assert.equal(saved.schema[0].fingerprint, schemaApi.schemaFingerprint())
     await request('DELETE', '/tags/workflow-tag')
     assert.equal((await request('GET', '/recurring'))[0].nextException.tags.length, 0)
     assert.equal((await request('GET', '/transactions')).items.length, 1)

@@ -1,6 +1,6 @@
 # Porkex — Backend
 
-REST API for Porkex, a personal finance tracker with transactions, categories, budgets, recurring payments and analytics. Built with Express, TypeScript and Prisma, using local SQLite or hosted Turso.
+REST API v1.0.0 for Porkex, a personal finance tracker with accounts, savings goals, transactions, categories, budgets, recurring payments and analytics. Built with Express, TypeScript and Prisma, using local SQLite or hosted Turso. Supports transaction CSV imports/exports and atomic full account-data JSON backups/restores.
 
 The interface is maintained in [porkex-web-app](https://github.com/adrixryz/porkex-web-app).
 
@@ -21,7 +21,7 @@ The API runs on [localhost:3000](http://localhost:3000); [GET /health](http://lo
 For a disposable database, recreate the schema and seed a demo account with 24 months of sample data. **This deletes all Porkex accounts and data in the configured database.** No separate `db:apply` step is needed.
 
 ```bash
-npm run db:seed -- --fresh
+npm run db:reset
 ```
 
 Default demo login: `seed@porkex.test` / `porkex123`. Override these with `SEED_EMAIL` and `SEED_PASSWORD`.
@@ -33,4 +33,6 @@ npm run build
 npm start
 ```
 
-Configure the database and allowed frontend origins using the variables documented in `.env.example`. Before updating an existing installation, create and verify a backup, then run `npm run db:apply`. Startup validates schema compatibility and refuses pending or incompatible migrations without changing the database.
+Configure `DATABASE_URL`, `TURSO_AUTH_TOKEN` when using Turso, a private stable `JWT_SECRET` and the allowed frontend `CORS_ORIGINS` using `.env.example`. Install with `npm ci` before building. Initialize an empty database once with `npm run db:apply`, separately from startup, then run the matching frontend/backend revisions. `/health` must return `{"status":"ok","db":"up"}`. Never seed demo credentials or run `db:reset` as an automatic deployment step.
+
+Version 1.0.0 starts with the current `schema.prisma` and no migration history because the previous development data is disposable. `npm run db:apply` only initializes an empty database or preserves one that is already current; startup never resets or updates the schema. `npm run db:reset` remains an explicit destructive tool for disposable development data. After the first deployment, preserve real data: future schema updates require incremental migrations and a verified backup, not a reset.

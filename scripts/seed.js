@@ -6,7 +6,8 @@
 //
 //   npm run db:seed            # skips (exit 0) when the account already exists
 //   npm run db:seed -- --reset # wipes that account's data first
-//   npm run db:seed -- --fresh # recreates ALL Porkex tables, then seeds
+//   npm run db:reset           # recreates ALL Porkex tables, then seeds
+//   npm run db:seed -- --fresh # equivalent explicit development reset
 //
 // Configuration, all optional:
 //   SEED_EMAIL     default seed@porkex.test
@@ -18,90 +19,18 @@
 //
 // It writes to whatever DATABASE_URL points at, so running it locally fills
 // prisma/dev.db and running it on Render fills Turso. Only the account named by
-// SEED_EMAIL is ever touched.
+// SEED_EMAIL is ever touched except when --fresh recreates every Porkex table.
 const { PrismaClient } = require('@prisma/client')
 const { createPrismaAdapter } = require('./lib/prisma-adapter')
 const { randomUUID } = require('node:crypto')
-const { spawnSync } = require('node:child_process')
-const path = require('node:path')
 const { loadEnvironment, databaseConfig, createClient, safeError } = require('./lib/database')
-const { loadMigrations, buildReference, describe, sameSchema } = require('./lib/migrations')
+const { initializeDatabase, checkDatabaseSchema } = require('./lib/schema')
 const bcrypt = require('bcryptjs')
 
 loadEnvironment()
 
 const RESET = process.argv.includes('--reset')
 const FRESH = process.argv.includes('--fresh')
-
-async function recreateSchema(client) {
-  const schema = spawnSync(
-    process.execPath,
-    [
-      require.resolve('prisma/build/index.js'),
-      'migrate',
-      'diff',
-      '--from-empty',
-      '--to-schema',
-      path.join(__dirname, '..', 'prisma', 'schema.prisma'),
-      '--script'
-    ],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, DATABASE_URL: 'file::memory:', TURSO_AUTH_TOKEN: '' }
-    }
-  )
-  if (schema.error || schema.status !== 0)
-    throw new Error(
-      'Could not generate the current test schema: ' + (schema.error?.message || schema.stderr)
-    )
-  const migrations = loadMigrations()
-  const reference = await buildReference(migrations)
-  let tx
-  try {
-    tx = await client.transaction('write')
-    // Children first, including aliases and next-only exceptions. Unrelated
-    // tables are never dropped; unexpected references fail transactionally.
-    for (const table of [
-      'Favorite',
-      'FinancialEdit',
-      'BalanceAdjustment',
-      'FinancialReceipt',
-      'Transfer',
-      'OccurrenceTag',
-      'OccurrenceOverride',
-      'TransactionTag',
-      'TagReference',
-      'Tag',
-      'Transaction',
-      'RecurringRule',
-      'Budget',
-      'Category',
-      'Account',
-      'User',
-      '_PorkexMigration'
-    ])
-      await tx.execute(`DROP TABLE IF EXISTS "${table}"`)
-    await tx.executeMultiple(schema.stdout)
-    if (!sameSchema(await describe(tx), reference.versions.at(-1)))
-      throw new Error('The current schema and migration history disagree.')
-    // Register this fresh baseline for existing maintenance tools. No incremental
-    // migrations or historical data conversions run against the configured DB.
-    await tx.execute(
-      'CREATE TABLE "_PorkexMigration" ("id" TEXT NOT NULL PRIMARY KEY, "checksum" TEXT NOT NULL, "appliedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)'
-    )
-    for (const migration of migrations)
-      await tx.execute({
-        sql: 'INSERT INTO "_PorkexMigration" (id, checksum) VALUES (?, ?)',
-        args: [migration.id, migration.checksum]
-      })
-    if ((await tx.execute('PRAGMA foreign_key_check')).rows.length)
-      throw new Error('Fresh schema has foreign-key violations.')
-    await tx.commit()
-  } finally {
-    tx?.close()
-    reference.client.close()
-  }
-}
 
 const CONFIG = {
   email: (process.env.SEED_EMAIL || 'seed@porkex.test').toLowerCase(),
@@ -587,8 +516,9 @@ async function main() {
   try {
     if (FRESH) {
       console.log('Recreating all Porkex tables for disposable test data.')
-      await recreateSchema(client)
+      await initializeDatabase(client, { reset: true })
     }
+    if (!FRESH) await checkDatabaseSchema(client)
     prisma = new PrismaClient({ adapter: createPrismaAdapter(client) })
     console.log(`Seeding ${CONFIG.email} with ${CONFIG.months} months of data (${CONFIG.timeZone})`)
     console.log(
