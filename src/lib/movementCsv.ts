@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { prisma } from './prisma'
 import { catalogName, catalogNameKey } from './catalogNames'
-import { assertCategoryNamesAvailable } from './categories'
+import { assertCategoryNamesAvailable, nextCategoryPosition } from './categories'
 import { dayKey, isDayString, parseDay } from './dates'
 import { FinanceError, balance, mainAccount } from './finance'
 import { toCents, fromCents } from './money'
@@ -320,6 +320,7 @@ export async function importCsv(userId: number, body: Record<string, unknown>, t
       const tags = new Map(existingTags.map(tag => [tag.normalizedName, tag.id]))
       let position = existingTags.reduce((max, tag) => Math.max(max, tag.position), -1)
       const newAccounts: Prisma.AccountCreateManyInput[] = []
+      let categoryPosition = await nextCategoryPosition(userId, db)
       const newCategories = new Map<string, Prisma.CategoryCreateManyInput>()
       const newTags: Prisma.TagCreateManyInput[] = []
       for (const row of rows) {
@@ -340,7 +341,8 @@ export async function importCsv(userId: number, body: Record<string, unknown>, t
             userId,
             name: row.category,
             type: row.type,
-            color: '#9E9E9E'
+            color: '#9E9E9E',
+            position: categoryPosition++
           })
         for (const name of row.tags) {
           const normalizedName = keyOf(name)

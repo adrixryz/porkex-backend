@@ -33,3 +33,8 @@ export async function assertCategoryNamesAvailable(
     used.add(key)
   }
 }
+
+export async function nextCategoryPosition(userId: number, db: Prisma.TransactionClient) {
+  const result = await db.category.aggregate({ where: { userId }, _max: { position: true } })
+  return (result._max.position ?? -1) + 1
+}

@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma'
 import {
   accountList,
   balance,
+  totalBalance,
   financialWrite,
   FinanceError,
   requireFunds,
@@ -48,12 +49,7 @@ accountsRouter.get('/dashboard/summary', async (req: AuthRequest, res) => {
       ])
       const totalIncome = income._sum.amount || 0,
         totalExpense = expense._sum.amount || 0
-      const funds = account
-        ? await balance(userId, account.id, db)
-        : totalIncome -
-          totalExpense +
-          ((await db.account.aggregate({ where: { userId }, _sum: { openingBalance: true } }))._sum
-            .openingBalance || 0)
+      const funds = account ? await balance(userId, account.id, db) : await totalBalance(userId, db)
       return {
         globalBalance: fromCents(funds),
         totalIncome: fromCents(totalIncome),
@@ -90,6 +86,11 @@ accountsRouter.post('/accounts', async (req: AuthRequest, res) => {
       body = req.body ?? {},
       id = body.id ?? body.clientId ?? randomUUID()
     if (!validId(id)) throw new FinanceError('Invalid account ID.')
+    if (
+      body.excludeFromTotalBalance !== undefined &&
+      typeof body.excludeFromTotalBalance !== 'boolean'
+    )
+      throw new FinanceError('Choose a valid total balance setting.')
     const result = await financialWrite(userId, `account:create:${id}`, async db => {
       const name = catalogName(body.name, 60),
         openingBalance = toCentsNonNegative(body.openingBalance ?? 0)
@@ -97,7 +98,15 @@ accountsRouter.post('/accounts', async (req: AuthRequest, res) => {
         throw new FinanceError(`Account name must contain 1–60 characters. ${catalogNameError}`)
       if (openingBalance === null) throw new FinanceError('Enter a nonnegative opening balance.')
       await assertAccountNameAvailable(userId, name, db)
-      const row = await db.account.create({ data: { id, name, openingBalance, userId } })
+      const row = await db.account.create({
+        data: {
+          id,
+          name,
+          openingBalance,
+          userId,
+          excludeFromTotalBalance: body.excludeFromTotalBalance ?? false
+        }
+      })
       if (openingBalance > 0)
         await db.balanceAdjustment.create({
           data: {
@@ -141,6 +150,11 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
     const userId = req.userId!,
       id = String(req.params.id),
       body = req.body ?? {}
+    if (
+      body.excludeFromTotalBalance !== undefined &&
+      typeof body.excludeFromTotalBalance !== 'boolean'
+    )
+      throw new FinanceError('Choose a valid total balance setting.')
     const result = await financialWrite(
       userId,
       `account:edit:${validId(body.mutationId) ? body.mutationId : randomUUID()}`,
@@ -174,6 +188,7 @@ accountsRouter.put('/accounts/:id', async (req: AuthRequest, res) => {
           data: {
             name,
             openingBalance,
+            excludeFromTotalBalance: body.excludeFromTotalBalance ?? row.excludeFromTotalBalance,
             archived: typeof body.archived === 'boolean' ? body.archived : row.archived
           }
         })

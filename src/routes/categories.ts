@@ -5,7 +5,7 @@ import { AuthRequest } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { fromCents } from '../lib/money'
 import { isUniqueViolation } from '../lib/errors'
-import { assertCategoryNameAvailable } from '../lib/categories'
+import { assertCategoryNameAvailable, nextCategoryPosition } from '../lib/categories'
 import { FinanceError } from '../lib/finance'
 import { Router } from 'express'
 import { parseCategoryId, resolveRange, parseClientId, validateCategoryInput } from './apiShared'
@@ -20,7 +20,7 @@ categoriesRouter.get('/categories', async (req: AuthRequest, res) => {
 
     const catsPromise = prisma.category.findMany({
       where: { userId },
-      orderBy: { name: 'asc' },
+      orderBy: [{ position: 'asc' }, { name: 'asc' }, { id: 'asc' }],
       // All-time counts: the UI needs the movement count to know whether
       // deleting requires a reassignment target (which ignores the selected
       // period), and the budget and rule counts to warn about what else goes.
@@ -89,7 +89,14 @@ categoriesRouter.post('/categories', async (req: AuthRequest, res) => {
       }
       await assertCategoryNameAvailable(userId, v.name!, db)
       const cat = await db.category.create({
-        data: { name: v.name!, type: v.type!, color: v.color ?? null, userId, clientId }
+        data: {
+          name: v.name!,
+          type: v.type!,
+          color: v.color ?? null,
+          userId,
+          clientId,
+          position: await nextCategoryPosition(userId, db)
+        }
       })
       return { cat, created: true }
     })
@@ -107,6 +114,46 @@ categoriesRouter.post('/categories', async (req: AuthRequest, res) => {
     }
     console.error('Category creation failed.', error)
     res.status(500).json({ error: 'Category creation failed.' })
+  }
+})
+
+categoriesRouter.put('/categories/order', async (req: AuthRequest, res) => {
+  const userId = req.userId!
+  const ids: unknown = req.body?.ids
+  if (
+    !Array.isArray(ids) ||
+    !ids.length ||
+    ids.some(id => !Number.isInteger(id) || id <= 0 || id > 2147483647) ||
+    new Set(ids).size !== ids.length
+  )
+    return res.status(400).json({ error: 'Provide unique category IDs in the requested order.' })
+  try {
+    await prisma.$transaction(async db => {
+      await acceptFinancialEdit(db, userId, 'categories:order', req.body ?? {})
+      const categories = await db.category.findMany({
+        where: { userId },
+        orderBy: [{ position: 'asc' }, { name: 'asc' }, { id: 'asc' }]
+      })
+      const owned = new Set(categories.map(category => category.id))
+      if (ids.some(id => !owned.has(id)))
+        throw new FinanceError(
+          'A category is no longer available. Refresh the list before reordering.',
+          409
+        )
+      const selected = new Set(ids)
+      let index = 0
+      const ordered = categories.map(category =>
+        selected.has(category.id) ? (ids[index++] as number) : category.id
+      )
+      for (const [position, id] of ordered.entries())
+        await db.category.update({ where: { id }, data: { position } })
+    })
+    res.json({ success: true })
+  } catch (error) {
+    if (error instanceof FinanceError)
+      return res.status(error.status).json({ error: error.message })
+    console.error('Category ordering failed.', error)
+    res.status(500).json({ error: 'Could not save category order.' })
   }
 })
 

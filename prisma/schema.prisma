@@ -41,6 +41,7 @@ model Category {
   clientId            String?
   name                String
   type                String
+  position            Int                  @default(0)
   color               String?
   userId              Int
   user                User                 @relation(fields: [userId], references: [id])
@@ -230,6 +231,7 @@ model Account {
   openingBalance Int             @default(0)
   isMain         Boolean         @default(false)
   archived       Boolean         @default(false)
+  excludeFromTotalBalance Boolean @default(false)
   transactions   Transaction[]
   recurringRules RecurringRule[]
   budgets        Budget[]

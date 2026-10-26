@@ -54,6 +54,46 @@ export async function balance(userId: number, id: string, db: Prisma.Transaction
     (outgoing._sum.amount || 0)
   )
 }
+/** Total is the sum of included account balances, including cross-account transfers. */
+export async function totalBalance(userId: number, db: Prisma.TransactionClient = prisma) {
+  const accounts = await db.account.findMany({
+    where: { userId, excludeFromTotalBalance: false },
+    select: { id: true, isMain: true, openingBalance: true }
+  })
+  if (!accounts.length) return 0
+  const ids = accounts.map(account => account.id)
+  const [movements, incoming, outgoing] = await Promise.all([
+    db.transaction.groupBy({
+      by: ['type'],
+      where: {
+        userId,
+        OR: [
+          { accountId: { in: ids } },
+          ...(accounts.some(account => account.isMain) ? [{ accountId: null }] : [])
+        ]
+      },
+      _sum: { amount: true }
+    }),
+    db.transfer.aggregate({
+      where: { userId, destinationId: { in: ids } },
+      _sum: { amount: true }
+    }),
+    db.transfer.aggregate({
+      where: { userId, sourceId: { in: ids } },
+      _sum: { amount: true }
+    })
+  ])
+  return (
+    accounts.reduce((sum, account) => sum + account.openingBalance, 0) +
+    movements.reduce(
+      (sum, group) => sum + (group.type === 'Income' ? 1 : -1) * (group._sum.amount ?? 0),
+      0
+    ) +
+    (incoming._sum.amount ?? 0) -
+    (outgoing._sum.amount ?? 0)
+  )
+}
+
 /** Optional owned account scope, including legacy movements belonging to Main. */
 export async function accountTransactionScope(
   userId: number,
