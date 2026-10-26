@@ -241,9 +241,13 @@ export function validateFullBackup(value: unknown): FullBackup {
       }
     }
   }
-  const accountNames = tables.Account.map(row => catalogNameKey(String(row.name)))
-  if (new Set(accountNames).size !== accountNames.length)
-    return invalid('Account names in the backup must be unique.')
+  for (const table of ['Account', 'Category', 'Tag', 'Favorite'] as const) {
+    const names = tables[table].map(row => catalogNameKey(String(row.name)))
+    if (new Set(names).size !== names.length)
+      return invalid(`${table} names in the backup must be unique.`)
+  }
+  if (tables.Tag.some(row => row.normalizedName !== catalogNameKey(String(row.name))))
+    return invalid('Tag names in the backup do not match their canonical keys.')
   const references: [Table, string, Table][] = [
     ['TagReference', 'tagId', 'Tag'],
     ['RecurringRule', 'accountId', 'Account'],

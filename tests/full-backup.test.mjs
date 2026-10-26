@@ -125,6 +125,17 @@ await withServer('full-backup', async ctx => {
   for (const row of legacy.tables.Account) delete row.excludeFromTotalBalance
   for (const row of legacy.tables.Category) delete row.position
   await request('POST', '/backup/preview', { backup: legacy })
+  for (const table of ['Account', 'Category', 'Tag', 'Favorite']) {
+    const duplicate = JSON.parse(JSON.stringify(backup))
+    const original = duplicate.tables[table][0]
+    duplicate.tables[table].push({
+      ...original,
+      id: typeof original.id === 'number' ? 2147483647 : randomUUID(),
+      name: ' ' + original.name.toUpperCase() + ' ',
+      ...(table === 'Tag' ? { normalizedName: 'different-key' } : {})
+    })
+    await request('POST', '/backup/preview', { backup: duplicate }, 400)
+  }
   const corrupt = JSON.parse(JSON.stringify(backup))
   corrupt.tables.Transaction[0].categoryId = 99999999
   await request('POST', '/backup/preview', { backup: corrupt }, 400)

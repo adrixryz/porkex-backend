@@ -6,7 +6,7 @@ import { fromCents, toCents } from '../lib/money'
 import { movementAccount, financialWrite, FinanceError } from '../lib/finance'
 import { acceptFinancialEdit } from '../lib/financialEdits'
 import { commentInput, resolveTagIds } from '../lib/tags'
-import { catalogName, catalogNameError } from '../lib/catalogNames'
+import { catalogName, catalogNameError, catalogNameKey } from '../lib/catalogNames'
 export const favoritesRouter = Router()
 const serialize = (row: Favorite) => ({
   ...row,
@@ -55,6 +55,17 @@ for (const method of ['post', 'put', 'delete'] as const)
             throw new FinanceError(
               `Favorite name must contain 1–60 characters. ${catalogNameError}`
             )
+          const existingNames = await db.favorite.findMany({
+            where: { userId },
+            select: { id: true, name: true }
+          })
+          if (
+            existingNames.some(
+              favorite =>
+                favorite.id !== id && catalogNameKey(favorite.name) === catalogNameKey(name)
+            )
+          )
+            throw new FinanceError('A favorite with that name already exists.', 409)
           const amount = toCents(body.amount),
             comment = commentInput(body),
             categoryId = Number(body.categoryId),

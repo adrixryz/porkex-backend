@@ -17,6 +17,43 @@ await withServer('favorites', async ctx => {
   const created = await ctx.call('POST', '/api/favorites', payload)
   assert.equal(created.status, 201, JSON.stringify(created.data))
   assert.equal((await ctx.call('POST', '/api/favorites', payload)).data.id, payload.id)
+  for (const name of ['lunch', ' LUNCH ']) {
+    const duplicate = await ctx.call('POST', '/api/favorites', {
+      ...payload,
+      id: randomUUID(),
+      name
+    })
+    assert.equal(duplicate.status, 409, JSON.stringify(duplicate.data))
+  }
+  const secondId = randomUUID()
+  assert.equal(
+    (await ctx.call('POST', '/api/favorites', { ...payload, id: secondId, name: 'Other meal' }))
+      .status,
+    201
+  )
+  assert.equal(
+    (await ctx.call('PUT', `/api/favorites/${secondId}`, { ...payload, name: 'Lunch' })).status,
+    409
+  )
+  await ctx.call('DELETE', `/api/favorites/${secondId}`)
+  const accentId = randomUUID()
+  assert.equal(
+    (await ctx.call('POST', '/api/favorites', { ...payload, id: accentId, name: 'Caf\u00e9' }))
+      .status,
+    201
+  )
+  assert.equal(
+    (
+      await ctx.call('POST', '/api/favorites', {
+        ...payload,
+        id: randomUUID(),
+        name: ' CAFE\u0301 '
+      })
+    ).status,
+    409
+  )
+  await ctx.call('DELETE', `/api/favorites/${accentId}`)
+
   assert.equal(
     (await ctx.call('GET', '/api/transactions')).data.total,
     0,
