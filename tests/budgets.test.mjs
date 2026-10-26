@@ -78,7 +78,7 @@ await withServer('budgets', async ({ call, check, state }) => {
   r = await call('POST', '/api/budgets', { categoryId: food.id, amount: -5, period: 'MONTH' })
   check('importe negativo → 400', r.status === 400, r.data?.error)
 
-  r = await call('POST', '/api/budgets', { categoryId: food.id, amount: 100, period: 'YEAR' })
+  r = await call('POST', '/api/budgets', { categoryId: food.id, amount: 100, period: 'QUARTER' })
   check('periodo invalido → 400', r.status === 400, r.data?.error)
 
   r = await call('POST', '/api/budgets', { categoryId: 99999, amount: 100, period: 'MONTH' })
@@ -115,7 +115,7 @@ await withServer('budgets', async ({ call, check, state }) => {
     `n=${r.data.budgets.length}`
   )
 
-  r = await call('GET', '/api/budgets?period=YEAR')
+  r = await call('GET', '/api/budgets?period=QUARTER')
   check('periodo invalido en query → 400', r.status === 400, r.data?.error)
 
   // ── today ancla la ventana (el cliente manda su propio día) ──

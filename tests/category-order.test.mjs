@@ -57,5 +57,51 @@ await withServer('category-order', async ctx => {
   )
   saved = await request('GET', '/categories')
   assert.equal(saved.at(-1).id, created.id, 'New categories append after saved order')
+  const account = await request('GET', '/accounts')
+  for (const categoryId of expense.slice(0, 2))
+    await request(
+      'POST',
+      '/budgets',
+      {
+        clientId: randomUUID(),
+        accountId: account.find(item => item.isMain).id,
+        categoryId,
+        amount: 100,
+        period: 'MONTH'
+      },
+      201
+    )
+  const cash = await request(
+    'POST',
+    '/accounts',
+    { id: randomUUID(), name: 'Cash', openingBalance: 0 },
+    201
+  )
+  await request(
+    'POST',
+    '/budgets',
+    {
+      clientId: randomUUID(),
+      accountId: cash.id,
+      categoryId: expense[0],
+      amount: 100,
+      period: 'MONTH'
+    },
+    201
+  )
+  const budgets = (await request('GET', '/budgets')).budgets
+  assert.deepEqual(
+    budgets.map(budget => budget.category.id),
+    saved
+      .filter(category => expense.slice(0, 2).includes(category.id))
+      .flatMap(category =>
+        category.id === expense[0] ? [category.id, category.id] : [category.id]
+      )
+  )
+  assert.deepEqual(
+    budgets.filter(budget => budget.category.id === expense[0]).map(budget => budget.account.name),
+    ['Main', 'Cash']
+  )
+  assert.ok(budgets.every(budget => Number.isInteger(budget.category.position)))
   console.log('Category ordering, ownership, partial lists, validation and stale edits passed.')
 })

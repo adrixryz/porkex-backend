@@ -1,3 +1,4 @@
+import { BUDGET_PERIODS } from './budgetPeriods'
 import { createHash, randomUUID } from 'node:crypto'
 import { Prisma } from '@prisma/client'
 import { FinanceError } from './finance'
@@ -290,7 +291,7 @@ export function validateFullBackup(value: unknown): FullBackup {
     )
       return invalid()
   for (const row of tables.Budget)
-    if (!['WEEK', 'MONTH'].includes(String(row.period))) return invalid()
+    if (!BUDGET_PERIODS.some(period => period === row.period)) return invalid()
   for (const row of tables.OccurrenceOverride)
     if (!['SKIP', 'EDIT'].includes(String(row.kind))) return invalid()
   for (const row of tables.Favorite) {

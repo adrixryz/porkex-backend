@@ -64,7 +64,7 @@ await withServer('full-backup', async ctx => {
       accountId: main,
       categoryId: expense.id,
       amount: 100,
-      period: 'MONTH'
+      period: 'YEAR'
     },
     201
   )
@@ -119,6 +119,7 @@ await withServer('full-backup', async ctx => {
   assert.ok(!JSON.stringify(backup).includes('password'))
   assert.ok(!JSON.stringify(backup).includes('sessionVersion'))
   const originalBalances = await request('GET', '/accounts?includeGoals=true')
+  assert.equal(backup.tables.Budget[0].period, 'YEAR')
   assert.equal(backup.tables.Account.find(row => row.name === 'Cash').excludeFromTotalBalance, true)
   const legacy = JSON.parse(JSON.stringify(backup))
   for (const row of legacy.tables.Account) delete row.excludeFromTotalBalance

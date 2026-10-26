@@ -171,21 +171,19 @@ export async function assertAccountNameAvailable(
   )
     throw new FinanceError('An account with that name already exists.', 409)
 }
+/** Shared catalogue order: Main, then normal accounts in insertion order, then goals. */
+export async function accountOrder(userId: number, db: Prisma.TransactionClient = prisma) {
+  const rows = await db.$queryRaw<{ id: string }[]>`
+    SELECT id FROM Account WHERE userId = ${userId}
+    ORDER BY isGoal ASC, isMain DESC, rowid ASC
+  `
+  return rows.map(row => row.id)
+}
 export async function accountList(userId: number, db: Prisma.TransactionClient = prisma) {
   await mainAccount(userId, db)
-  // SQLite rowid preserves insertion order even though account IDs are UUIDs.
-  // Read IDs only so Prisma continues decoding booleans and amounts normally.
-  const insertionOrder = await db.$queryRaw<{ id: string }[]>`
-    SELECT id FROM Account WHERE userId = ${userId} ORDER BY rowid ASC
-  `
-  const positions = new Map(insertionOrder.map((row, index) => [row.id, index]))
+  const positions = new Map((await accountOrder(userId, db)).map((id, index) => [id, index]))
   const accounts = await db.account.findMany({ where: { userId } })
-  accounts.sort(
-    (a, b) =>
-      Number(a.isGoal) - Number(b.isGoal) ||
-      Number(b.isMain) - Number(a.isMain) ||
-      positions.get(a.id)! - positions.get(b.id)!
-  )
+  accounts.sort((a, b) => positions.get(a.id)! - positions.get(b.id)!)
   const [movements, incoming, outgoing] = await Promise.all([
     db.transaction.groupBy({
       by: ['accountId', 'type'],

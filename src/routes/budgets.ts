@@ -3,7 +3,13 @@ import { AuthRequest } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { fromCents, toCents } from '../lib/money'
 import { isUniqueViolation } from '../lib/errors'
-import { movementAccount, FinanceError, accountTransactionScope, mainAccount } from '../lib/finance'
+import {
+  movementAccount,
+  FinanceError,
+  accountTransactionScope,
+  mainAccount,
+  accountOrder
+} from '../lib/finance'
 import { Router } from 'express'
 import {
   parseCategoryId,
@@ -21,7 +27,7 @@ budgetsRouter.get('/budgets', async (req: AuthRequest, res) => {
   const userId = req.userId!
   const requested = req.query.period ? parseBudgetPeriod(req.query.period) : null
   if (req.query.period && !requested) {
-    return res.status(400).json({ error: 'Period must be WEEK or MONTH.' })
+    return res.status(400).json({ error: 'Period must be WEEK, MONTH or YEAR.' })
   }
 
   const today = resolveToday(req.query as Record<string, unknown>, res.locals.today)
@@ -33,7 +39,7 @@ budgetsRouter.get('/budgets', async (req: AuthRequest, res) => {
   }
 
   try {
-    // No period filter means both, so each budget is measured on its own cycle.
+    // No period filter means all cycles, so each budget is measured on its own cycle.
     const { account, where: accountWhere } = await accountTransactionScope(
       userId,
       req.query.accountId
@@ -51,12 +57,12 @@ budgetsRouter.get('/budgets', async (req: AuthRequest, res) => {
       },
       include: {
         account: { select: { id: true, name: true, archived: true } },
-        category: { select: { id: true, name: true, color: true, type: true } }
+        category: { select: { id: true, name: true, color: true, type: true, position: true } }
       },
-      orderBy: { id: 'asc' }
+      orderBy: [{ category: { position: 'asc' } }, { category: { name: 'asc' } }, { id: 'asc' }]
     })
 
-    // A WEEK and a MONTH budget for the same category need different sums, so
+    // Different budget cycles for the same category need different sums, so
     // spending is grouped once per period present in the list.
     const periods = [...new Set(budgets.map(b => b.period as BudgetPeriod))]
     const spentByPeriod = new Map<BudgetPeriod, Map<string, number>>()
@@ -114,6 +120,15 @@ budgetsRouter.get('/budgets', async (req: AuthRequest, res) => {
       }
     })
 
+    const accountPositions = new Map((await accountOrder(userId)).map((id, index) => [id, index]))
+    payload.sort(
+      (a, b) =>
+        a.category.position - b.category.position ||
+        a.category.name.localeCompare(b.category.name) ||
+        (accountPositions.get(a.accountId) ?? Number.MAX_SAFE_INTEGER) -
+          (accountPositions.get(b.accountId) ?? Number.MAX_SAFE_INTEGER) ||
+        a.id - b.id
+    )
     res.json({ budgets: payload, totals })
   } catch (error) {
     if (error instanceof FinanceError)
@@ -133,7 +148,7 @@ budgetsRouter.post('/budgets', async (req: AuthRequest, res) => {
       where: { userId, clientId },
       include: {
         account: { select: { id: true, name: true, archived: true } },
-        category: { select: { id: true, name: true, color: true, type: true } }
+        category: { select: { id: true, name: true, color: true, type: true, position: true } }
       }
     })
   const replyExisting = async () => {
@@ -160,7 +175,7 @@ budgetsRouter.post('/budgets', async (req: AuthRequest, res) => {
 
   const period = parseBudgetPeriod(req.body?.period)
   if (!period) {
-    return res.status(400).json({ error: 'Period must be WEEK or MONTH.' })
+    return res.status(400).json({ error: 'Period must be WEEK, MONTH or YEAR.' })
   }
 
   const categoryId = parseCategoryId(req.body?.categoryId)
@@ -195,7 +210,7 @@ budgetsRouter.post('/budgets', async (req: AuthRequest, res) => {
       data: { userId, accountId: account.id, categoryId, amount, period, clientId },
       include: {
         account: { select: { id: true, name: true, archived: true } },
-        category: { select: { id: true, name: true, color: true, type: true } }
+        category: { select: { id: true, name: true, color: true, type: true, position: true } }
       }
     })
     res.status(201).json({ ...budget, amount: fromCents(budget.amount) })
@@ -230,7 +245,7 @@ budgetsRouter.put('/budgets/:id', async (req: AuthRequest, res) => {
 
   const period = parseBudgetPeriod(req.body?.period)
   if (!period) {
-    return res.status(400).json({ error: 'Period must be WEEK or MONTH.' })
+    return res.status(400).json({ error: 'Period must be WEEK, MONTH or YEAR.' })
   }
 
   try {
@@ -270,7 +285,7 @@ budgetsRouter.put('/budgets/:id', async (req: AuthRequest, res) => {
         data: { amount, period, accountId: account.id },
         include: {
           account: { select: { id: true, name: true, archived: true } },
-          category: { select: { id: true, name: true, color: true, type: true } }
+          category: { select: { id: true, name: true, color: true, type: true, position: true } }
         }
       })
       return budget

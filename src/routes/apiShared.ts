@@ -1,3 +1,4 @@
+import { BUDGET_PERIODS, type BudgetPeriod } from '../lib/budgetPeriods'
 import type { Prisma } from '@prisma/client'
 import { prisma } from '../lib/prisma'
 import { fromCents, toCents } from '../lib/money'
@@ -258,9 +259,8 @@ export function validateCategoryInput(body: Record<string, unknown>): {
   return { name, type: body.type, color: rawColor }
 }
 
-export const BUDGET_PERIODS = ['WEEK', 'MONTH'] as const
-
-export type BudgetPeriod = (typeof BUDGET_PERIODS)[number]
+export { BUDGET_PERIODS } from '../lib/budgetPeriods'
+export type { BudgetPeriod } from '../lib/budgetPeriods'
 
 export function budgetRange(
   period: BudgetPeriod,
@@ -272,6 +272,11 @@ export function budgetRange(
     const last = addDays(first, 6)
     return { from: first, to: new Date(last.getTime() + 86400000 - 1) }
   }
+  if (period === 'YEAR')
+    return {
+      from: new Date(Date.UTC(today.getUTCFullYear(), 0, 1)),
+      to: new Date(Date.UTC(today.getUTCFullYear() + 1, 0, 1) - 1)
+    }
   return {
     from: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)),
     to: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1) - 1)
