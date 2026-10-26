@@ -1,8 +1,8 @@
 // Seeds a test account with 24 months of realistic activity, so every screen
 // has something to show: the dashboard, the analytics ranges, the category
-// totals, the budget progress bars (both under and over the limit) and the
+// catalogue order, the budget progress bars (both under and over the limit) and the
 // transaction list with its filters and search, and the recurring screen with
-// four rules, tags and next-only exceptions.
+// daily/weekly/monthly/yearly rules, tags and next-only exceptions.
 //
 //   npm run db:seed            # skips (exit 0) when the account already exists
 //   npm run db:seed -- --reset # wipes that account's data first
@@ -246,7 +246,9 @@ function buildBudgets(categoriesByName) {
     { name: 'Transport', period: 'MONTH', amount: 140 },
     { name: 'Entertainment', period: 'MONTH', amount: 120 },
     { name: 'Food', period: 'WEEK', amount: 90 },
-    { name: 'Transport', period: 'WEEK', amount: 35 }
+    { name: 'Transport', period: 'WEEK', amount: 35 },
+    { name: 'Food', period: 'YEAR', amount: 5000 },
+    { name: 'Transport', period: 'YEAR', amount: 1800 }
   ].map(b => ({
     categoryId: categoriesByName[b.name].id,
     period: b.period,
@@ -315,7 +317,8 @@ async function seedAccount(db, user, startDate, day) {
     data: CATEGORIES.map((c, index) => ({
       ...c,
       userId: user.id,
-      clientId: 'seed-category-' + index
+      clientId: 'seed-category-' + index,
+      position: index
     }))
   })
   const categories = await db.category.findMany({ where: { userId: user.id } })
@@ -488,16 +491,240 @@ async function seedAccount(db, user, startDate, day) {
       accountId: main.id
     }
   })
+  // Account states, corrections and multiple account filters.
+  const savings = await db.account.create({
+    data: {
+      id: `seed-savings-${user.id}`,
+      userId: user.id,
+      name: 'Savings',
+      openingBalance: 100000,
+      excludeFromTotalBalance: true
+    }
+  })
+  const archived = await db.account.create({
+    data: {
+      id: `seed-archived-${user.id}`,
+      userId: user.id,
+      name: 'Old Wallet',
+      openingBalance: 5000,
+      archived: true
+    }
+  })
+  const laptop = await db.account.create({
+    data: {
+      id: `seed-laptop-${user.id}`,
+      userId: user.id,
+      name: 'New Laptop',
+      isGoal: true,
+      targetAmount: 60000
+    }
+  })
+  await db.account.create({
+    data: {
+      id: `seed-emergency-${user.id}`,
+      userId: user.id,
+      name: 'Emergency Fund',
+      isGoal: true,
+      targetAmount: 200000
+    }
+  })
+  await db.transfer.createMany({
+    data: [
+      {
+        id: `seed-laptop-funds-${user.id}`,
+        userId: user.id,
+        sourceId: main.id,
+        destinationId: laptop.id,
+        amount: 60000,
+        date: day,
+        comment: 'Laptop goal completed'
+      },
+      {
+        id: `seed-goal-withdrawal-${user.id}`,
+        userId: user.id,
+        sourceId: goal.id,
+        destinationId: main.id,
+        amount: 5000,
+        date: day,
+        comment: 'Travel booking refund'
+      }
+    ]
+  })
+  for (const account of [cash, savings, archived])
+    await db.balanceAdjustment.create({
+      data: {
+        userId: user.id,
+        id: `seed-opening-${account.id}`,
+        accountId: account.id,
+        accountName: account.name,
+        kind: 'opening-balance',
+        previousBalance: 0,
+        balance: account.openingBalance,
+        effectiveDate: startDate,
+        createdAt: startDate
+      }
+    })
+  await db.account.update({
+    where: { id: cash.id },
+    data: { openingBalance: cash.openingBalance + 5000 }
+  })
+  await db.balanceAdjustment.create({
+    data: {
+      userId: user.id,
+      id: `seed-correction-${user.id}`,
+      accountId: cash.id,
+      accountName: cash.name,
+      kind: 'balance-adjustment',
+      previousBalance: 20000,
+      balance: 25000,
+      effectiveDate: day,
+      createdAt: new Date()
+    }
+  })
+  const examples = [
+    {
+      clientId: 'seed-cash-expense',
+      accountId: cash.id,
+      categoryId: byName.Food.id,
+      type: 'Expense',
+      amount: 1250,
+      description: 'Lunch and groceries for the weekend with friends',
+      date: day
+    },
+    {
+      clientId: 'seed-cash-income',
+      accountId: cash.id,
+      categoryId: byName.Sales.id,
+      type: 'Income',
+      amount: 1500,
+      description: 'Marketplace sale',
+      date: day
+    },
+    {
+      clientId: 'seed-archived-expense',
+      accountId: archived.id,
+      categoryId: byName.Transport.id,
+      type: 'Expense',
+      amount: 800,
+      description: 'Last bus card top up',
+      date: startDate
+    }
+  ]
+  for (const [index, row] of examples.entries()) {
+    const movement = await db.transaction.create({
+      data: {
+        ...row,
+        userId: user.id,
+        createdAt: row.date,
+        editedAt: row.date,
+        lastEditId: 'seed-example-' + index
+      }
+    })
+    await db.transactionTag.create({
+      data: {
+        transactionId: movement.id,
+        tagId: tagIds([row.type === 'Income' ? 'One-off' : 'Daily'])[0]
+      }
+    })
+  }
+  await db.budget.createMany({
+    data: [
+      { period: 'WEEK', amount: 3000 },
+      { period: 'MONTH', amount: 12000 },
+      { period: 'YEAR', amount: 100000 }
+    ].map(row => ({
+      ...row,
+      userId: user.id,
+      accountId: cash.id,
+      categoryId: byName.Food.id,
+      clientId: 'seed-cash-budget-' + row.period
+    }))
+  })
+  await db.tagReference.create({
+    data: { id: `seed-essential-alias-${user.id}`, tagId: tagIds(['Essential'])[0] }
+  })
+  await db.favorite.update({
+    where: { id: `seed-favorite-${user.id}` },
+    data: { tagIds: JSON.stringify(tagIds(['Daily', 'Essential'])) }
+  })
+  await db.favorite.create({
+    data: {
+      id: `seed-income-favorite-${user.id}`,
+      userId: user.id,
+      name: 'Marketplace sale',
+      type: 'Income',
+      amount: 1500,
+      comment: '',
+      categoryId: byName.Sales.id,
+      accountId: cash.id,
+      tagIds: JSON.stringify(tagIds(['One-off']))
+    }
+  })
+  await db.recurringRule.update({ where: { id: lunch.id }, data: { accountId: cash.id } })
+  await db.recurringRule.update({ where: { id: commute.id }, data: { active: false } })
+  const annualDate = new Date(
+    Date.UTC(
+      day.getUTCFullYear() + (day >= new Date(Date.UTC(day.getUTCFullYear(), 0, 15)) ? 1 : 0),
+      0,
+      15
+    )
+  )
+  await db.recurringRule.createMany({
+    data: [
+      {
+        categoryId: byName.Food.id,
+        accountId: cash.id,
+        type: 'Expense',
+        amount: 450,
+        description: 'Daily coffee',
+        frequency: 'DAY',
+        startDate: addDays(day, 1),
+        nextDate: addDays(day, 1),
+        endDate: addDays(day, 30)
+      },
+      {
+        categoryId: byName.Housing.id,
+        accountId: main.id,
+        type: 'Expense',
+        amount: 24000,
+        description: 'Annual insurance',
+        frequency: 'YEAR',
+        startDate: annualDate,
+        nextDate: annualDate,
+        endDate: null
+      },
+      {
+        categoryId: byName.Sales.id,
+        accountId: cash.id,
+        type: 'Income',
+        amount: 2500,
+        description: 'Weekly market sales',
+        frequency: 'WEEK',
+        startDate: addDays(day, 4),
+        nextDate: addDays(day, 4),
+        endDate: null
+      }
+    ].map((row, index) => ({
+      ...row,
+      userId: user.id,
+      interval: 1,
+      active: true,
+      clientId: 'seed-extra-rule-' + index
+    }))
+  })
+  const activity = await db.transaction.groupBy({
+    by: ['type'],
+    where: { userId: user.id },
+    _sum: { amount: true }
+  })
   return {
-    transactions: transactions.length,
+    transactions: await db.transaction.count({ where: { userId: user.id } }),
     tags: tags.length,
-    links: links.length,
-    earned: transactions
-      .filter(row => row.type === 'Income')
-      .reduce((sum, row) => sum + row.amount, 0),
-    spent: transactions
-      .filter(row => row.type === 'Expense')
-      .reduce((sum, row) => sum + row.amount, 0)
+    links: await db.transactionTag.count({ where: { transaction: { userId: user.id } } }),
+    rules: await db.recurringRule.count({ where: { userId: user.id } }),
+    budgets: await db.budget.count({ where: { userId: user.id } }),
+    earned: activity.find(row => row.type === 'Income')?._sum.amount ?? 0,
+    spent: activity.find(row => row.type === 'Expense')?._sum.amount ?? 0
   }
 }
 
@@ -551,9 +778,21 @@ async function main() {
     console.log(
       `  ${result.transactions} transactions, ${result.tags} tags, ${result.links} tag links`
     )
-    console.log('  4 recurring rules: salary, rent, next-only lunch edit and skipped commute')
-    console.log('  5 budgets (3 monthly, 2 weekly)')
-    console.log(`  balance ${((result.earned - result.spent) / 100).toFixed(2)} ${CONFIG.currency}`)
+    console.log(
+      `  ${result.rules} rules: all frequencies, both types, paused and next-only edits/skips`
+    )
+    console.log(
+      `  ${result.budgets} budgets across Main and Cash, with weekly/monthly/yearly cycles`
+    )
+    console.log(
+      '  Main, Cash, excluded Savings, archived Old Wallet; empty, funded and completed goals'
+    )
+    console.log(
+      '  Transfers, goal withdrawals, balance corrections, tag aliases and income/expense favorites'
+    )
+    console.log(
+      `  net activity ${((result.earned - result.spent) / 100).toFixed(2)} ${CONFIG.currency}`
+    )
     console.log(`Log in as ${CONFIG.email} with the configured SEED_PASSWORD.`)
   } finally {
     await prisma?.$disconnect()

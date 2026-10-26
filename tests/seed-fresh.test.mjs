@@ -68,7 +68,7 @@ try {
     assert(snapshot.rows > 20)
     assert.equal(snapshot.invalid, 0)
     assert.equal(snapshot.cats, 9)
-    assert.equal(snapshot.budgets, 5)
+    assert.equal(snapshot.budgets, 10)
     assert.deepEqual(snapshot.users, [{ email: 'fresh@example.test', sessionVersion: 0 }])
     assert.equal(snapshot.fingerprint, schemaApi.schemaFingerprint())
     assert.equal(snapshot.foreign, 0)

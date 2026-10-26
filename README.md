@@ -1,6 +1,6 @@
 # Porkex — Backend
 
-REST API v1.0.0 for Porkex, a personal finance tracker with accounts, savings goals, transactions, categories, budgets, recurring payments and analytics. Built with Express, TypeScript and Prisma, using local SQLite or hosted Turso. Supports transaction CSV imports/exports and atomic full account-data JSON backups/restores.
+REST API v1.0.0 for Porkex, a personal finance tracker with accounts, savings goals, transactions, categories, weekly/monthly/yearly budgets, recurring payments and analytics. Built with Express, TypeScript and Prisma, using local SQLite or hosted Turso. Supports transaction CSV imports/exports and atomic full account-data JSON backups/restores.
 
 The interface is maintained in [porkex-web-app](https://github.com/adrixryz/porkex-web-app).
 
@@ -24,7 +24,7 @@ For a disposable database, recreate the schema and seed a demo account with 24 m
 npm run db:reset
 ```
 
-Default demo login: `seed@porkex.test` / `porkex123`. Override these with `SEED_EMAIL` and `SEED_PASSWORD`.
+Default demo login: `seed@porkex.test` / `porkex123`. Override these with `SEED_EMAIL` and `SEED_PASSWORD`. The demo includes active, archived and excluded accounts; empty, funded and completed goals; transfers and balance corrections; ordered categories and tags; income/expense favorites; all budget cycles across two accounts; and daily/weekly/monthly/yearly recurring rules with paused, skipped and edited occurrences.
 
 ## Production build
 

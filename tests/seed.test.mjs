@@ -75,11 +75,11 @@ await withServer('seed', async ctx => {
       tags:{orderBy:{position:'asc'},include:{references:true}},
       transactions:{orderBy:{clientId:'asc'},include:{tags:{include:{tag:true}}}},
       recurringRules:{orderBy:{description:'asc'},include:{exceptions:{include:{tags:{include:{tag:true}}}}}},
-      budgets:true,categories:true
+      budgets:true,categories:true,accounts:true,favorites:true,balanceAdjustments:true,transfers:true
     }});
     const tagNames=links=>links.map(link=>link.tag.name).sort();
     const rows=user.transactions.map(row=>({date:row.date,amount:row.amount,type:row.type,comment:row.description,tags:tagNames(row.tags)}));
-    const rules=user.recurringRules.map(rule=>({name:rule.description,amount:rule.amount,start:rule.startDate,next:rule.nextDate,cursor:rule.lastProcessedDate,
+    const rules=user.recurringRules.map(rule=>({name:rule.description,frequency:rule.frequency,active:rule.active,end:rule.endDate,amount:rule.amount,start:rule.startDate,next:rule.nextDate,cursor:rule.lastProcessedDate,
       exceptions:rule.exceptions.map(item=>({kind:item.kind,date:item.date,comment:item.comment,amount:item.amount,tags:tagNames(item.tags)}))}));
     const foreignKeys=await client.execute('PRAGMA foreign_key_check');
     console.log(JSON.stringify({id:user.id,count:rows.length,categories:user.categories.length,budgets:user.budgets.length,
@@ -89,6 +89,11 @@ await withServer('seed', async ctx => {
       wholeCents:rows.every(row=>Number.isInteger(row.amount)),
       maxTags:Math.max(...rows.map(row=>row.tags.length)),untagged:rows.some(row=>!row.tags.length),
       blankIncome:rows.some(row=>row.type==='Income'&&!row.comment),blankExpense:rows.some(row=>row.type==='Expense'&&!row.comment),
+      accounts:user.accounts.map(account=>({name:account.name,goal:account.isGoal,archived:account.archived,excluded:account.excludeFromTotalBalance})),
+      favorites:user.favorites.map(favorite=>({type:favorite.type,tags:JSON.parse(favorite.tagIds).length})),
+      adjustments:user.balanceAdjustments.map(item=>item.kind),transfers:user.transfers.length,
+      cycles:[...new Set(user.budgets.map(budget=>budget.period))].sort(),
+      positions:user.categories.map(category=>category.position).sort((a,b)=>a-b),
       rules,foreignKeys:foreignKeys.rows.length,
       digest:createHash('sha256').update(JSON.stringify({rows,rules,tags:user.tags.map(tag=>tag.name)})).digest('hex')}));
   `)
@@ -111,18 +116,40 @@ await withServer('seed', async ctx => {
   assert.equal(first.last.slice(0, 10), isoDay(today))
   assert.ok(first.count > 500)
   assert.equal(first.categories, 9)
-  assert.equal(first.budgets, 5)
+  assert.equal(first.budgets, 10)
   assert.equal(first.tags.length, 8)
   assert.deepEqual(
     first.tags.map(tag => tag.position),
     [0, 1, 2, 3, 4, 5, 6, 7]
   )
-  assert.ok(first.tags.every(tag => tag.aliases === 1))
+  assert.equal(first.tags.find(tag => tag.name === 'Essential').aliases, 2)
+  assert.ok(first.tags.filter(tag => tag.name !== 'Essential').every(tag => tag.aliases === 1))
   assert.equal(first.maxTags, 5)
   for (const key of ['untagged', 'blankIncome', 'blankExpense', 'midnight', 'wholeCents'])
     assert.equal(first[key], true, key)
   assert.equal(first.foreignKeys, 0)
-  assert.equal(first.rules.length, 4)
+  assert.equal(first.rules.length, 7)
+  assert.deepEqual([...new Set(first.rules.map(rule => rule.frequency))].sort(), [
+    'DAY',
+    'MONTH',
+    'WEEK',
+    'YEAR'
+  ])
+  assert.ok(first.rules.some(rule => !rule.active))
+  assert.ok(first.rules.some(rule => rule.end))
+  assert.equal(first.accounts.length, 7)
+  assert.equal(first.accounts.filter(account => account.goal).length, 3)
+  assert.ok(first.accounts.some(account => account.name === 'Savings' && account.excluded))
+  assert.ok(first.accounts.some(account => account.name === 'Old Wallet' && account.archived))
+  assert.deepEqual(first.favorites.map(favorite => favorite.type).sort(), ['Expense', 'Income'])
+  assert.ok(first.favorites.every(favorite => favorite.tags > 0))
+  assert.ok(
+    first.adjustments.includes('opening-balance') &&
+      first.adjustments.includes('balance-adjustment')
+  )
+  assert.equal(first.transfers, 4)
+  assert.deepEqual(first.cycles, ['MONTH', 'WEEK', 'YEAR'])
+  assert.deepEqual(first.positions, [0, 1, 2, 3, 4, 5, 6, 7, 8])
   assert.ok(first.rules.every(rule => rule.next.slice(0, 10) > isoDay(today)))
   const lunch = first.rules.find(rule => rule.name === 'Weekly lunch')
   assert.equal(lunch.amount, 3500)
@@ -167,6 +194,15 @@ await withServer('seed', async ctx => {
   assert.equal(login.status, 200)
   ctx.state.token = login.data.token
   const headers = { 'X-Porkex-Time-Zone': 'America/Lima' }
+  const accounts = (await ctx.call('GET', '/api/accounts?includeGoals=true')).data
+  assert.ok(accounts.find(account => account.name === 'New Laptop').balance === 600)
+  assert.equal(accounts.find(account => account.name === 'Emergency Fund').balance, 0)
+  assert.equal(accounts.find(account => account.name === 'Vacation').balance, 150)
+  assert.equal(accounts.find(account => account.name === 'Cash').balance, 252.5)
+  const backup = (await ctx.call('GET', '/api/backup')).data
+  assert.equal(backup.tables.Budget.length, 10)
+  assert.equal((await ctx.call('POST', '/api/backup/preview', { backup })).status, 200)
+
   const rules = await ctx.call('GET', '/api/recurring', null, headers)
   assert.equal(rules.status, 200)
   assert.equal(
