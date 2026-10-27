@@ -401,7 +401,10 @@ async function seedAccount(db, user, startDate, day) {
     nextDate: date
   })
   const lunch = await db.recurringRule.create({
-    data: weekly('Food', 35, 'Weekly lunch', addDays(day, 2))
+    data: {
+      ...weekly('Food', 35, 'Weekly lunch', addDays(day, 2)),
+      tags: { create: tagIds(['Daily']).map(tagId => ({ tagId })) }
+    }
   })
   await db.occurrenceOverride.create({
     data: {

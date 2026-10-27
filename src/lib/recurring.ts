@@ -87,7 +87,10 @@ async function materializeUser(userId: number, today: Date): Promise<RecurringRe
     .sort((a, b) => Number(b.type === 'Income') - Number(a.type === 'Income') || a.id - b.id)
   for (const { id } of due) {
     const result = await prisma.$transaction(async tx => {
-      const rule = await tx.recurringRule.findFirst({ where: { id, userId, active: true } })
+      const rule = await tx.recurringRule.findFirst({
+        where: { id, userId, active: true },
+        include: { tags: true }
+      })
       if (!rule || rule.nextDate > today) return { count: 0, blocked: false }
       const frequency = parseFrequency(rule.frequency)
       if (!frequency) throw new Error(`Unknown recurring frequency: ${rule.frequency}`)
@@ -126,7 +129,11 @@ async function materializeUser(userId: number, today: Date): Promise<RecurringRe
               date: nextDate,
               editedAt: new Date(),
               recurringId: id,
-              tags: { create: (override?.tags ?? []).map(tag => ({ tagId: tag.tagId })) }
+              tags: {
+                create: (override?.kind === 'EDIT' ? override.tags : rule.tags).map(tag => ({
+                  tagId: tag.tagId
+                }))
+              }
             }
           })
           count++

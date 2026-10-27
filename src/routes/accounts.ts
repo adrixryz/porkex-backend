@@ -311,6 +311,9 @@ for (const method of ['put', 'delete'] as const)
           const desired = method === 'put' ? toCentsNonNegative(body.balance) : null
           if (method === 'put' && desired === null)
             throw new FinanceError('Enter a valid nonnegative balance.')
+          const effectiveDate = body.date === undefined ? entry.effectiveDate : parseDay(body.date)
+          if (method === 'put' && (!effectiveDate || effectiveDate > res.locals.today))
+            throw new FinanceError('Enter a valid date that is not in the future.')
           const oldBalance = entry.balance
           const previousBalance = entry.previousBalance
           const delta = method === 'put' ? desired! - oldBalance : previousBalance - oldBalance
@@ -327,7 +330,7 @@ for (const method of ['put', 'delete'] as const)
           else
             await db.balanceAdjustment.update({
               where: { userId_id: { userId, id } },
-              data: { balance: desired! }
+              data: { balance: desired!, effectiveDate: effectiveDate! }
             })
           return { success: true }
         }

@@ -6,7 +6,7 @@ export const serializeAdjustment = (entry: BalanceAdjustment) => ({
   ...entry,
   previousBalance: fromCents(entry.previousBalance),
   balance: fromCents(entry.balance),
-  date: entry.createdAt.toISOString()
+  date: entry.effectiveDate.toISOString()
 })
 
 /** Select only the requested page before hydrating its account relations. */
@@ -22,9 +22,9 @@ export async function accountHistory(
     ? Prisma.sql`AND (sourceId = ${accountId} OR destinationId = ${accountId})`
     : Prisma.empty
   const transferRows = includeTransfers
-    ? Prisma.sql`UNION ALL SELECT id, 'transfer' AS kind, createdAt FROM Transfer WHERE userId = ${userId} ${transferScope}`
+    ? Prisma.sql`UNION ALL SELECT id, 'transfer' AS kind, date AS effectiveDate, createdAt FROM Transfer WHERE userId = ${userId} ${transferScope}`
     : Prisma.empty
-  const rows = Prisma.sql`SELECT id, kind, createdAt FROM BalanceAdjustment WHERE userId = ${userId} ${adjustmentScope} ${transferRows}`
+  const rows = Prisma.sql`SELECT id, kind, effectiveDate, createdAt FROM BalanceAdjustment WHERE userId = ${userId} ${adjustmentScope} ${transferRows}`
   const [count] = await db.$queryRaw<{ total: bigint }[]>(
     Prisma.sql`SELECT count(*) AS total FROM (${rows})`
   )
@@ -33,7 +33,9 @@ export async function accountHistory(
   const page = Math.min(totalPages, Math.max(1, Math.floor(Number(requestedPage) || 1)))
   const selected = await db.$queryRaw<{ id: string; kind: string }[]>(Prisma.sql`
     SELECT id, kind FROM (${rows})
-    ORDER BY CASE WHEN typeof(createdAt) IN ('integer', 'real') THEN createdAt
+    ORDER BY CASE WHEN typeof(effectiveDate) IN ('integer', 'real') THEN effectiveDate
+      ELSE CAST(ROUND((julianday(effectiveDate) - 2440587.5) * 86400000) AS INTEGER) END DESC,
+      CASE WHEN typeof(createdAt) IN ('integer', 'real') THEN createdAt
       ELSE CAST(ROUND((julianday(createdAt) - 2440587.5) * 86400000) AS INTEGER) END DESC, id DESC
     LIMIT 15 OFFSET ${(page - 1) * 15}`)
   const [adjustments, transfers] = await Promise.all([

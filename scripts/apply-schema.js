@@ -1,6 +1,7 @@
 // Initialize the current disposable development schema on SQLite or Turso.
 const { loadEnvironment, databaseConfig, createClient, safeError } = require('./lib/database')
 const { buildReference, initializeDatabase } = require('./lib/schema')
+const { referenceVersions } = require('./lib/migrations')
 
 loadEnvironment()
 
@@ -12,6 +13,7 @@ async function main() {
   if (args[0] === '--check') {
     const reference = await buildReference()
     reference.client.close()
+    await referenceVersions()
     console.log('The current development schema can be generated from schema.prisma.')
     return
   }

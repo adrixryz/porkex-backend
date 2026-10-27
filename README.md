@@ -35,4 +35,10 @@ npm start
 
 Configure `DATABASE_URL`, `TURSO_AUTH_TOKEN` when using Turso, a private stable `JWT_SECRET` and the allowed frontend `CORS_ORIGINS` using `.env.example`. Install with `npm ci` before building. Initialize an empty database once with `npm run db:apply`, separately from startup, then run the matching frontend/backend revisions. `/health` must return `{"status":"ok","db":"up"}`. Never seed demo credentials or run `db:reset` as an automatic deployment step.
 
-The current `prisma/schema.prisma` is the definitive v1.0.0 baseline; retain this release revision for future migrations. Version 1.0.0 starts with this model and no migration history because the previous development data is disposable. `npm run db:apply` only initializes an empty database or preserves one that is already current; startup never resets or updates the schema. `npm run db:reset` remains an explicit destructive tool for disposable development data. After the first deployment, preserve real data: future schema updates require incremental migrations and a verified backup, not a reset.
+Existing v1.0.0 databases use the preserved `prisma/baselines/1.0.0.prisma` baseline and immutable incremental migrations. Stop the API and other writers before upgrading. The following command creates and independently verifies a new backup before applying pending migrations in a transaction; keep a separate secure copy of the backup.
+
+```bash
+npm run db:migrate -- --backup prisma/backups/before-upgrade.db
+```
+
+The backup path must not exist. Check the selected `DATABASE_URL` before running the command, especially for Turso. A schema mismatch, invalid migration history, failed integrity check or backup failure aborts the upgrade. `npm run db:apply` initializes an empty database or preserves an already current one; application startup never migrates or resets. `npm run db:reset` is destructive and is only for disposable development data.

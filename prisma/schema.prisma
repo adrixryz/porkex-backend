@@ -114,6 +114,7 @@ model RecurringRule {
   updatedAt         DateTime             @updatedAt
   transactions      Transaction[]
   exceptions        OccurrenceOverride[]
+  tags              RecurringTag[]
 
   // Scoped by user, like Transaction: NULLs are distinct, so many client-less
   // rows coexist while a row from the queue cannot duplicate on replay.
@@ -173,6 +174,7 @@ model Tag {
   references     TagReference[]
   transactions   TransactionTag[]
   occurrences    OccurrenceTag[]
+  recurringRules RecurringTag[]
 
   @@unique([userId, normalizedName])
   @@index([userId, position])
@@ -191,6 +193,16 @@ model TransactionTag {
   tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([transactionId, tagId])
+  @@index([tagId])
+}
+
+model RecurringTag {
+  ruleId Int
+  tagId  String
+  rule   RecurringRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  tag    Tag           @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, tagId])
   @@index([tagId])
 }
 

@@ -12,6 +12,7 @@ export const BACKUP_TABLES = [
   'Tag',
   'TagReference',
   'RecurringRule',
+  'RecurringTag',
   'OccurrenceOverride',
   'Transaction',
   'TransactionTag',
@@ -50,13 +51,15 @@ const fields = (table: Table) =>
   model(table).fields.filter(field => field.kind === 'scalar' && field.name !== 'userId')
 // Prisma 7's runtime DMMF omits primary keys, nullability and unique indexes.
 const primaryKey = (table: Table) =>
-  table === 'TransactionTag'
-    ? ['transactionId', 'tagId']
-    : table === 'OccurrenceOverride'
-      ? ['ruleId', 'date']
-      : table === 'OccurrenceTag'
-        ? ['ruleId', 'date', 'tagId']
-        : ['id']
+  table === 'RecurringTag'
+    ? ['ruleId', 'tagId']
+    : table === 'TransactionTag'
+      ? ['transactionId', 'tagId']
+      : table === 'OccurrenceOverride'
+        ? ['ruleId', 'date']
+        : table === 'OccurrenceTag'
+          ? ['ruleId', 'date', 'tagId']
+          : ['id']
 const nullable = new Set([
   'Account.targetAmount',
   'Category.clientId',
@@ -88,7 +91,7 @@ const scope = (table: Table) => {
   if (table === 'TagReference') return '"tagId" IN (SELECT "id" FROM "Tag" WHERE "userId" = ?)'
   if (table === 'TransactionTag')
     return '"transactionId" IN (SELECT "id" FROM "Transaction" WHERE "userId" = ?)'
-  if (table === 'OccurrenceOverride' || table === 'OccurrenceTag')
+  if (table === 'OccurrenceOverride' || table === 'OccurrenceTag' || table === 'RecurringTag')
     return '"ruleId" IN (SELECT "id" FROM "RecurringRule" WHERE "userId" = ?)'
   return '"userId" = ?'
 }
@@ -165,7 +168,7 @@ export function validateFullBackup(value: unknown): FullBackup {
     return invalid()
   const tables = {} as FullBackup['tables']
   for (const table of BACKUP_TABLES) {
-    const rows = file.tables[table]
+    const rows = table === 'RecurringTag' ? (file.tables[table] ?? []) : file.tables[table]
     if (!Array.isArray(rows)) return invalid()
     const columns = fields(table)
     const keys = new Set<string>()
@@ -252,6 +255,8 @@ export function validateFullBackup(value: unknown): FullBackup {
     ['TagReference', 'tagId', 'Tag'],
     ['RecurringRule', 'accountId', 'Account'],
     ['RecurringRule', 'categoryId', 'Category'],
+    ['RecurringTag', 'ruleId', 'RecurringRule'],
+    ['RecurringTag', 'tagId', 'Tag'],
     ['OccurrenceOverride', 'ruleId', 'RecurringRule'],
     ['OccurrenceOverride', 'categoryId', 'Category'],
     ['Transaction', 'accountId', 'Account'],
@@ -273,6 +278,8 @@ export function validateFullBackup(value: unknown): FullBackup {
       if (row[field] !== null && !lookup(parent).has(row[field]))
         return invalid('The backup contains broken references. No data was changed.')
   const occurrences = new Set(tables.OccurrenceOverride.map(row => `${row.ruleId}:${row.date}`))
+  for (const rule of tables.RecurringRule)
+    if (tables.RecurringTag.filter(row => row.ruleId === rule.id).length > 5) return invalid()
   for (const row of tables.OccurrenceTag)
     if (!occurrences.has(`${row.ruleId}:${row.date}`)) return invalid()
   const main = tables.Account.filter(row => row.isMain)

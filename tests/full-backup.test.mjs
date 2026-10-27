@@ -93,6 +93,7 @@ await withServer('full-backup', async ctx => {
       type: 'Income',
       amount: 100,
       description: 'Salary',
+      tagIds: ['personal-alias'],
       frequency: 'MONTH',
       interval: 1,
       startDate: '2090-01-01'
@@ -124,6 +125,7 @@ await withServer('full-backup', async ctx => {
   const legacy = JSON.parse(JSON.stringify(backup))
   for (const row of legacy.tables.Account) delete row.excludeFromTotalBalance
   for (const row of legacy.tables.Category) delete row.position
+  delete legacy.tables.RecurringTag
   await request('POST', '/backup/preview', { backup: legacy })
   for (const table of ['Account', 'Category', 'Tag', 'Favorite']) {
     const duplicate = JSON.parse(JSON.stringify(backup))

@@ -13,7 +13,7 @@ await withServer('account-workflows', async ctx => {
   }
   await call('PUT', `/accounts/${main}`, { balance: 500, mutationId: randomUUID() })
   await call('POST', '/accounts', { id: cash, name: 'Cash', openingBalance: 100 }, 201)
-  const date = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' })
+  const date = new Date().toISOString().slice(0, 10)
   const previous = new Date(date + 'T00:00:00Z')
   previous.setUTCDate(previous.getUTCDate() - 1)
   const yesterday = previous.toISOString().slice(0, 10)
@@ -124,7 +124,11 @@ await withServer('account-workflows', async ctx => {
   assert.equal(timeline.items.at(-1).balance, 100)
   assert(
     timeline.items.every(
-      (row, index, rows) => index === 0 || rows[index - 1].createdAt >= row.createdAt
+      (row, index, rows) =>
+        index === 0 ||
+        rows[index - 1].date >= row.date ||
+        (rows[index - 1].date.slice(0, 10) === row.date.slice(0, 10) &&
+          rows[index - 1].createdAt >= row.createdAt)
     )
   )
   assert.equal((await call('GET', '/accounts/movements?accountId=foreign')).total, 0)

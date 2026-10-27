@@ -17,6 +17,7 @@
     "test": "node tests/run.mjs",
     "db:push": "node scripts/apply-schema.js",
     "db:apply": "node scripts/apply-schema.js",
+    "db:migrate": "node scripts/migrate-db.js",
     "db:check": "node scripts/apply-schema.js --check",
     "db:seed": "node scripts/seed.js",
     "db:reset": "prisma generate && node scripts/seed.js --fresh",

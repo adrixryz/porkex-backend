@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { withServer, createTestUser } from './helpers.mjs'
 
 await withServer('adjustments', async ctx => {
-  const { expense } = await createTestUser(ctx, 'unfunded@example.com')
+  const { user, expense } = await createTestUser(ctx, 'unfunded@example.com')
   const call = async (method, path, body, status = 200) => {
     const result = await ctx.call(method, '/api' + path, body)
     assert.equal(result.status, status, JSON.stringify(result.data))
@@ -22,6 +22,33 @@ await withServer('adjustments', async ctx => {
   const changed = (await call('GET', `/accounts/movements?accountId=${cash}`)).items[0]
   assert.equal(changed.balance, 180)
   assert.equal(changed.createdAt, original.createdAt)
+  await call('PUT', path, { balance: 180, date: '2024-01-10', mutationId: randomUUID() })
+  const dated = await call('GET', `/accounts/movements?accountId=${cash}`)
+  assert.equal(dated.items[0].kind, 'opening-balance')
+  assert.equal(dated.items[1].id, `account:edit:${editId}`)
+  assert.equal(dated.items[1].date.slice(0, 10), '2024-01-10')
+  const transferId = randomUUID()
+  await call(
+    'POST',
+    '/transfers',
+    {
+      id: transferId,
+      sourceId: cash,
+      destinationId: `main-${user.id}`,
+      amount: 1,
+      date: '2025-01-01',
+      comment: ''
+    },
+    201
+  )
+  const combined = await call('GET', `/accounts/movements?accountId=${cash}`)
+  assert.deepEqual(
+    combined.items.map(item => item.kind),
+    ['opening-balance', 'transfer', 'balance-adjustment']
+  )
+  await call('DELETE', `/transfers/${transferId}`)
+  await call('PUT', path, { balance: 180, date: '2099-01-01', mutationId: randomUUID() }, 400)
+  await call('PUT', path, { balance: 180, date: '2024-02-30', mutationId: randomUUID() }, 400)
   await call('DELETE', path)
   await call('DELETE', path)
   assert.equal((await call('GET', '/accounts')).find(a => a.id === cash).balance, 100)

@@ -311,6 +311,7 @@ export function serializeRule<
     categoryId: number
     lastProcessedDate?: Date | null
     nextDate?: Date
+    tags?: { tag: { id: string; name: string; position: number } }[]
     exceptions?: {
       date: Date
       amount: number | null
@@ -320,18 +321,20 @@ export function serializeRule<
     }[]
   }
 >(rule: T) {
-  const { lastProcessedDate: _cursor, exceptions, ...visible } = rule
+  const { lastProcessedDate: _cursor, exceptions, tags, ...visible } = rule
   const exception = exceptions?.find(
     item =>
       item.date.getTime() === rule.nextDate?.getTime() &&
       ((item.amount ?? rule.amount) !== rule.amount ||
         (item.comment ?? rule.description) !== rule.description ||
         (item.categoryId ?? rule.categoryId) !== rule.categoryId ||
-        item.tags.length > 0)
+        JSON.stringify(item.tags.map(link => link.tag.id).sort()) !==
+          JSON.stringify((tags ?? []).map(link => link.tag.id).sort()))
   )
   void _cursor
   return {
     ...visible,
+    tags: (tags ?? []).map(link => link.tag).sort((a, b) => a.position - b.position),
     nextException: exception
       ? {
           date: exception.date,

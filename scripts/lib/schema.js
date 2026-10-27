@@ -7,12 +7,14 @@ const { BACKEND_DIR, createClient, quoteIdentifier } = require('./database')
 const SCHEMA_FILE = path.join(BACKEND_DIR, 'prisma', 'schema.prisma')
 const STATE_TABLE = '_PorkexDevelopmentSchema'
 const LEGACY_LEDGER = '_PorkexMigration'
+const MIGRATION_LEDGER = '_PorkexSchemaMigration'
 const APPLICATION_TABLES = [
   'Favorite',
   'FinancialEdit',
   'BalanceAdjustment',
   'FinancialReceipt',
   'Transfer',
+  'RecurringTag',
   'OccurrenceTag',
   'OccurrenceOverride',
   'TransactionTag',
@@ -76,8 +78,8 @@ async function describe(client) {
     )
   ).rows.filter(
     row =>
-      ![STATE_TABLE, LEGACY_LEDGER].includes(row.name) &&
-      ![STATE_TABLE, LEGACY_LEDGER].includes(row.tbl_name)
+      ![STATE_TABLE, LEGACY_LEDGER, MIGRATION_LEDGER].includes(row.name) &&
+      ![STATE_TABLE, LEGACY_LEDGER, MIGRATION_LEDGER].includes(row.tbl_name)
   )
   const unexpected = catalog.find(row => row.type !== 'table' && row.type !== 'index')
   if (unexpected) throw new Error(`Unexpected schema object: ${unexpected.name}`)
@@ -150,9 +152,11 @@ async function checkDatabaseSchema(client, schemaPath = SCHEMA_FILE) {
       throw new Error('The database was not initialized from the current schema.prisma.')
     if (!sameSchema(await describe(client), JSON.parse(String(state.structure))))
       throw new Error('The database structure changed outside the development schema workflow.')
+    if (path.resolve(schemaPath) === path.resolve(SCHEMA_FILE))
+      await require('./migrations').checkLedger(client)
   } catch (error) {
     throw new Error(
-      'Database is not ready. For disposable development data run npm run db:reset explicitly. ' +
+      'Database is not ready. Use the verified migration workflow for existing data. ' +
         error.message,
       { cause: error }
     )
@@ -174,7 +178,7 @@ async function initializeDatabase(client, { reset = false, schemaPath = SCHEMA_F
     }
     if (reset) {
       // Explicit development reset only. Unknown tables are never silently deleted.
-      for (const table of [...APPLICATION_TABLES, STATE_TABLE, LEGACY_LEDGER])
+      for (const table of [...APPLICATION_TABLES, STATE_TABLE, LEGACY_LEDGER, MIGRATION_LEDGER])
         await transaction.execute(`DROP TABLE IF EXISTS ${quoteIdentifier(table)}`)
     }
     await transaction.executeMultiple(reference.sql)
@@ -192,6 +196,8 @@ async function initializeDatabase(client, { reset = false, schemaPath = SCHEMA_F
       sql: `INSERT INTO "${STATE_TABLE}" (id, fingerprint, structure) VALUES (1, ?, ?)`,
       args: [reference.fingerprint, JSON.stringify(reference.schema)]
     })
+    if (path.resolve(schemaPath) === path.resolve(SCHEMA_FILE))
+      await require('./migrations').createLedger(transaction)
     await transaction.commit()
     return { created: true }
   } catch (error) {

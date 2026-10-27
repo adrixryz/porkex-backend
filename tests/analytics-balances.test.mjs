@@ -48,6 +48,26 @@ await withServer('analytics-balances', async ctx => {
   assert.equal(corrected.data.trendData.at(-1).balance, 125)
   assert.equal(corrected.data.trendData.at(-1).balance, dashboard.data.globalBalance)
   assert.equal(corrected.data.insights.currentMonthExpense, 10)
+  const history = await ctx.call('GET', `/api/accounts/movements?accountId=${cash}`)
+  const adjustment = history.data.items.find(item => item.kind === 'balance-adjustment')
+  const backdated = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10)
+  assert.equal(
+    (
+      await ctx.call(
+        'PUT',
+        `/api/accounts/balance-adjustments/${encodeURIComponent(adjustment.id)}`,
+        {
+          balance: 25,
+          date: backdated,
+          mutationId: randomUUID()
+        }
+      )
+    ).status,
+    200
+  )
+  const moved = await ctx.call('GET', '/api/analytics?months=3&days=7')
+  assert.equal(moved.data.trendData[3].balance, corrected.data.trendData[3].balance - 15)
+  assert.equal(moved.data.trendData.at(-1).balance, corrected.data.trendData.at(-1).balance)
   ctx.check(
     'Analytics balance includes account openings and corrections without inflating spending',
     true

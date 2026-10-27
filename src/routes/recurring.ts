@@ -6,20 +6,24 @@ import { isUniqueViolation } from '../lib/errors'
 import { nextOccurrence } from '../lib/recurring'
 import { addDays, dayKey } from '../lib/dates'
 import { movementAccount, FinanceError } from '../lib/finance'
+import { resolveTagIds } from '../lib/tags'
 import { Router } from 'express'
 import { parseClientId, serializeRule, validateRecurringInput, initialNextDate } from './apiShared'
 
 export const recurringRouter = Router()
+
+const ruleInclude = {
+  category: true,
+  tags: { include: { tag: true } },
+  exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
+} as const
 
 recurringRouter.get('/recurring', async (req: AuthRequest, res) => {
   const userId = req.userId!
   try {
     const rules = await prisma.recurringRule.findMany({
       where: { userId },
-      include: {
-        category: true,
-        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
-      },
+      include: ruleInclude,
       // Active rules first; within each group, the ones that come due next.
       orderBy: [{ active: 'desc' }, { nextDate: 'asc' }, { id: 'asc' }]
     })
@@ -38,10 +42,7 @@ recurringRouter.post('/recurring', async (req: AuthRequest, res) => {
   const findByClientId = (clientId: string | null) =>
     prisma.recurringRule.findFirst({
       where: { clientId, userId },
-      include: {
-        category: true,
-        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
-      }
+      include: ruleInclude
     })
 
   let clientId: string | null = null
@@ -61,26 +62,28 @@ recurringRouter.post('/recurring', async (req: AuthRequest, res) => {
     const v = await validateRecurringInput(userId, req.body ?? {})
     if (v.error) return res.status(400).json({ error: v.error })
 
-    const account = await movementAccount(userId, req.body.accountId)
-    const created = await prisma.recurringRule.create({
-      data: {
-        accountId: account.id,
-        userId,
-        amount: v.amount!,
-        type: v.type!,
-        description: v.description!,
-        categoryId: v.categoryId!,
-        frequency: v.frequency!,
-        interval: v.interval!,
-        startDate: v.startDate!,
-        endDate: v.endDate ?? null,
-        nextDate: initialNextDate(v.startDate!, v.frequency!, v.interval!, res.locals.today),
-        ...(clientId ? { clientId } : {})
-      },
-      include: {
-        category: true,
-        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
-      }
+    const created = await prisma.$transaction(async db => {
+      const account = await movementAccount(userId, req.body.accountId, db)
+      const tags = await resolveTagIds(userId, req.body.tagIds ?? [], db)
+      if (!tags) throw new FinanceError('Choose up to five available tags.')
+      return db.recurringRule.create({
+        data: {
+          accountId: account.id,
+          userId,
+          amount: v.amount!,
+          type: v.type!,
+          description: v.description!,
+          categoryId: v.categoryId!,
+          frequency: v.frequency!,
+          interval: v.interval!,
+          startDate: v.startDate!,
+          endDate: v.endDate ?? null,
+          nextDate: initialNextDate(v.startDate!, v.frequency!, v.interval!, res.locals.today),
+          ...(clientId ? { clientId } : {}),
+          tags: { create: tags.map(tagId => ({ tagId })) }
+        },
+        include: ruleInclude
+      })
     })
 
     // Materialize right away when the first occurrence falls on today, so the
@@ -89,10 +92,7 @@ recurringRouter.post('/recurring', async (req: AuthRequest, res) => {
 
     const fresh = await prisma.recurringRule.findUnique({
       where: { id: created.id },
-      include: {
-        category: true,
-        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
-      }
+      include: ruleInclude
     })
     res.status(201).json(serializeRule(fresh ?? created))
   } catch (error) {
@@ -123,6 +123,9 @@ recurringRouter.put('/recurring/:id', async (req: AuthRequest, res) => {
 
       const v = await validateRecurringInput(userId, req.body, db)
       if (v.error) throw new FinanceError(v.error)
+      const tags =
+        req.body.tagIds === undefined ? undefined : await resolveTagIds(userId, req.body.tagIds, db)
+      if (tags === null) throw new FinanceError('Choose up to five available tags.')
 
       // Re-scheduling and resuming both restart the schedule at the first
       // occurrence that has not passed: the periods a pause (or an edit) skipped
@@ -175,15 +178,10 @@ recurringRouter.put('/recurring/:id', async (req: AuthRequest, res) => {
           startDate: v.startDate!,
           endDate,
           nextDate,
-          active
+          active,
+          ...(tags ? { tags: { deleteMany: {}, create: tags.map(tagId => ({ tagId })) } } : {})
         },
-        include: {
-          category: true,
-          exceptions: {
-            where: { processedAt: null },
-            include: { tags: { include: { tag: true } } }
-          }
-        }
+        include: ruleInclude
       })
       return rule
     })
@@ -194,10 +192,7 @@ recurringRouter.put('/recurring/:id', async (req: AuthRequest, res) => {
 
     const fresh = await prisma.recurringRule.findUnique({
       where: { id: ruleId },
-      include: {
-        category: true,
-        exceptions: { where: { processedAt: null }, include: { tags: { include: { tag: true } } } }
-      }
+      include: ruleInclude
     })
     res.json(serializeRule(fresh ?? updated))
   } catch (error) {

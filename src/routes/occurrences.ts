@@ -17,7 +17,10 @@ occurrencesRouter.put('/:ruleId/occurrences/:day', async (req: AuthRequest, res,
       .json({ error: 'A rule, scheduled date and SKIP or EDIT action are required.' })
   try {
     const result = await prisma.$transaction(async db => {
-      const rule = await db.recurringRule.findFirst({ where: { id: ruleId, userId: req.userId! } })
+      const rule = await db.recurringRule.findFirst({
+        where: { id: ruleId, userId: req.userId! },
+        include: { tags: true }
+      })
       if (!rule) return { status: 404, error: 'Recurring rule not found.' }
       const existing = await db.occurrenceOverride.findUnique({
         where: { ruleId_date: { ruleId, date } },
@@ -92,7 +95,8 @@ occurrencesRouter.put('/:ruleId/occurrences/:day', async (req: AuthRequest, res,
           amount === rule.amount &&
           comment === rule.description &&
           category.id === rule.categoryId &&
-          tagIds.length === 0
+          JSON.stringify([...tagIds].sort()) ===
+            JSON.stringify(rule.tags.map(tag => tag.tagId).sort())
         ) {
           await db.occurrenceOverride.deleteMany({ where: { ruleId, date, processedAt: null } })
           return { status: 200, success: true }
