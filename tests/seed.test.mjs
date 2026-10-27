@@ -193,15 +193,16 @@ await withServer('seed', async ctx => {
   })
   assert.equal(login.status, 200)
   ctx.state.token = login.data.token
-  const headers = { 'X-Porkex-Time-Zone': 'America/Lima' }
-  const accounts = (await ctx.call('GET', '/api/accounts?includeGoals=true')).data
+  // Every reader must use the seed calendar: UTC can already be tomorrow in Lima's evening.
+  const headers = { 'X-Porkex-Time-Zone': env.SEED_TIME_ZONE }
+  const accounts = (await ctx.call('GET', '/api/accounts?includeGoals=true', null, headers)).data
   assert.ok(accounts.find(account => account.name === 'New Laptop').balance === 600)
   assert.equal(accounts.find(account => account.name === 'Emergency Fund').balance, 0)
   assert.equal(accounts.find(account => account.name === 'Vacation').balance, 150)
   assert.equal(accounts.find(account => account.name === 'Cash').balance, 252.5)
-  const backup = (await ctx.call('GET', '/api/backup')).data
+  const backup = (await ctx.call('GET', '/api/backup', null, headers)).data
   assert.equal(backup.tables.Budget.length, 10)
-  assert.equal((await ctx.call('POST', '/api/backup/preview', { backup })).status, 200)
+  assert.equal((await ctx.call('POST', '/api/backup/preview', { backup }, headers)).status, 200)
 
   const rules = await ctx.call('GET', '/api/recurring', null, headers)
   assert.equal(rules.status, 200)
