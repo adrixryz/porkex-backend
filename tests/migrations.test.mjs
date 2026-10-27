@@ -48,9 +48,11 @@ try {
   })
   assert.equal(upgrade.status, 0, upgrade.stderr)
   assert.match(upgrade.stdout, /Restore verified/)
-  assert.match(upgrade.stdout, /Applied 1 migrations/)
+  assert.match(upgrade.stdout, /Applied 2 migrations/)
   await schema.checkDatabaseSchema(client)
-  assert.deepEqual((await client.execute('SELECT * FROM User')).rows, before.rows)
+  const after = (await client.execute('SELECT * FROM User')).rows[0]
+  assert.equal(after.language, 'en')
+  for (const [key, value] of Object.entries(before.rows[0])) assert.equal(after[key], value)
   assert.equal(
     (await client.execute('SELECT openingBalance FROM Account')).rows[0].openingBalance,
     12345n
@@ -66,4 +68,35 @@ try {
   console.log('PASS migrations: v1.0.0 upgrade, data preservation, replay and checksum refusal')
 } finally {
   client.close()
+}
+
+const intermediate = createClient({
+  url: `file:${join(process.env.PORKEX_MIGRATION_TEST_DIR, 'intermediate.db').replace(/\\/g, '/')}`,
+  intMode: 'bigint'
+})
+try {
+  await schema.initializeDatabase(intermediate, {
+    schemaPath: resolve('prisma/migrations/001_recurring_tags/schema.prisma')
+  })
+  await migrations.createLedger(intermediate, migrations.loadMigrations().slice(0, 1))
+  await intermediate.execute(
+    "INSERT INTO User (name,email,password) VALUES ('Owner','owner2@example.test','hash')"
+  )
+  await intermediate.execute(
+    "INSERT INTO Category (id,name,type,userId) VALUES (1,'Food','Expense',1)"
+  )
+  await intermediate.execute(
+    "INSERT INTO Tag (id,userId,name,normalizedName,position) VALUES ('tag',1,'Home','home',0)"
+  )
+  await intermediate.execute(
+    "INSERT INTO RecurringRule (id,userId,categoryId,amount,type,description,startDate,nextDate,updatedAt) VALUES (1,1,1,100,'Expense','Rent','2027-01-01','2027-01-01','2026-01-01')"
+  )
+  await intermediate.execute("INSERT INTO RecurringTag (ruleId,tagId) VALUES (1,'tag')")
+  assert.equal((await migrations.migrateDatabase(intermediate)).applied, 1)
+  await schema.checkDatabaseSchema(intermediate)
+  assert.equal((await intermediate.execute('SELECT tagId FROM RecurringTag')).rows[0].tagId, 'tag')
+  assert.equal((await intermediate.execute('SELECT language FROM User')).rows[0].language, 'en')
+  console.log('PASS migrations: upgrade from the first incremental schema preserves recurring tags')
+} finally {
+  intermediate.close()
 }

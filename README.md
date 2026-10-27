@@ -1,6 +1,6 @@
 # Porkex — Backend
 
-REST API v1.0.0 for Porkex, a personal finance tracker with accounts, savings goals, transactions, categories, weekly/monthly/yearly budgets, recurring payments and analytics. Built with Express, TypeScript and Prisma, using local SQLite or hosted Turso. Supports transaction CSV imports/exports and atomic full account-data JSON backups/restores.
+REST API v1.1.0 for Porkex, a personal finance tracker with accounts, savings goals, transactions, categories, weekly/monthly/yearly budgets, recurring payments and analytics. Built with Express, TypeScript and Prisma, using local SQLite or hosted Turso. Supports account language preferences, transaction CSV imports/exports and atomic full account-data JSON backups/restores.
 
 The interface is maintained in [porkex-web-app](https://github.com/adrixryz/porkex-web-app).
 

@@ -443,5 +443,6 @@ export const PROFILE_SELECT = {
   defaultPeriod: true,
   firstDayOfWeek: true,
   decimalSeparator: true,
+  language: true,
   createdAt: true
 } as const

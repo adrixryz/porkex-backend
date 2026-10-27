@@ -1,0 +1,327 @@
+generator client {
+  provider        = "prisma-client-js"
+  // Lets the app talk to the database through a driver adapter, which is what
+  // makes a hosted libSQL/Turso URL work with the same schema. See src/lib/prisma.ts.
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  favorites          Favorite[]
+  id                 Int                 @id @default(autoincrement())
+  name               String
+  email              String              @unique
+  password           String
+  sessionVersion     Int                 @default(0)
+  currency           String              @default("USD")
+  // Display preferences, mirrored from the frontend so they follow the account
+  // to any browser. Plain strings, not enums: the additive deploy tool adds
+  // them to an existing table, and SQLite needs a default for a NOT NULL
+  // column (see scripts/apply-schema.js).
+  defaultPeriod      String              @default("week")
+  firstDayOfWeek     String              @default("MONDAY")
+  decimalSeparator   String              @default(".")
+  language           String              @default("en")
+  accounts           Account[]
+  financialEdits     FinancialEdit[]
+  balanceAdjustments BalanceAdjustment[]
+  receipts           FinancialReceipt[]
+  transfers          Transfer[]
+  transactions       Transaction[]
+  categories         Category[]
+  budgets            Budget[]
+  recurringRules     RecurringRule[]
+  tags               Tag[]
+  createdAt          DateTime            @default(now())
+}
+
+model Category {
+  id                  Int                  @id @default(autoincrement())
+  clientId            String?
+  name                String
+  type                String
+  position            Int                  @default(0)
+  color               String?
+  userId              Int
+  user                User                 @relation(fields: [userId], references: [id])
+  transactions        Transaction[]
+  budgets             Budget[]
+  recurringRules      RecurringRule[]
+  occurrenceOverrides OccurrenceOverride[]
+
+  @@unique([userId, name])
+  @@unique([userId, clientId])
+  @@index([userId])
+}
+
+// Monetary amounts are stored as whole minor units (cents) in an Int column.
+// SQLite has no exact decimal type: a Prisma Decimal is stored as REAL, i.e. the
+// same lossy double a Float would use. Only an integer keeps sums exact.
+
+// A spending limit for one category, repeated every WEEK or MONTH.
+model Budget {
+  accountId  String?
+  account    Account? @relation(fields: [accountId], references: [id])
+  id         Int      @id @default(autoincrement())
+  clientId   String?
+  categoryId Int
+  // A spending limit is a property of its category, so it goes away with it.
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id])
+  amount     Int
+  period     String   @default("MONTH")
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, accountId, categoryId, period])
+  @@unique([userId, clientId])
+  @@index([userId, period])
+}
+
+// A movement template (income or expense) that repeats on a schedule. Each
+// occurrence that comes due is materialized as a real Transaction (see
+// src/lib/recurring.ts), so every existing reader — dashboard, analytics,
+// budgets, the transactions list — keeps working on plain rows.
+model RecurringRule {
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id])
+
+  id                Int                  @id @default(autoincrement())
+  userId            Int
+  user              User                 @relation(fields: [userId], references: [id])
+  categoryId        Int
+  category          Category             @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  amount            Int
+  type              String
+  description       String
+  // WEEK | MONTH | YEAR, meaning "every `interval` of them".
+  frequency         String               @default("MONTH")
+  interval          Int                  @default(1)
+  // The schedule's anchor: month occurrences keep this day (clamped to the
+  // last day of shorter months), week occurrences its weekday.
+  startDate         DateTime
+  // Inclusive; null means it runs forever.
+  endDate           DateTime?
+  // The next occurrence still to materialize, at UTC midnight.
+  nextDate          DateTime
+  // Durable cursor: deleting/editing generated history must never replay it.
+  lastProcessedDate DateTime?
+  active            Boolean              @default(true)
+  // See Transaction.clientId: same replay protection for queued creates.
+  clientId          String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  transactions      Transaction[]
+  exceptions        OccurrenceOverride[]
+  tags              RecurringTag[]
+
+  // Scoped by user, like Transaction: NULLs are distinct, so many client-less
+  // rows coexist while a row from the queue cannot duplicate on replay.
+  @@unique([userId, clientId])
+  @@index([userId, active, nextDate])
+  @@index([categoryId])
+}
+
+model Transaction {
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id])
+
+  id          Int              @id @default(autoincrement())
+  editedAt    DateTime?
+  lastEditId  String?
+  amount      Int
+  type        String
+  // Set by the client so a retried write cannot create a duplicate: the
+  // frontend queues failed mutations and replays them, and a response lost in
+  // transit must not turn into two identical movements. Null for anything
+  // created without a client (tests, seed data).
+  clientId    String?
+  description String
+  date        DateTime         @default(now())
+  createdAt   DateTime         @default(now())
+  categoryId  Int
+  category    Category         @relation(fields: [categoryId], references: [id])
+  userId      Int
+  user        User             @relation(fields: [userId], references: [id])
+  // Set on the movements a recurring rule generated; null for everything else.
+  // Deleting a rule keeps its movements: they are history. The delete route
+  // clears this pointer explicitly, because the additive deploy tool cannot
+  // add a foreign key to an already existing table.
+  recurringId Int?
+  recurring   RecurringRule?   @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  tags        TransactionTag[]
+
+  // Scoped by user: two accounts may independently use the same clientId, which
+  // matches how everything else in this schema is owned. NULLs are distinct in
+  // both SQLite and Postgres, so many client-less rows coexist.
+  @@unique([userId, clientId])
+  // One occurrence per rule and day: the guarantee that a catch-up pass — or
+  // two racing requests — can never materialize the same date twice.
+  @@unique([recurringId, date])
+  @@index([userId, date])
+  @@index([userId, accountId])
+  @@index([categoryId])
+}
+
+model Tag {
+  id             String           @id
+  userId         Int
+  user           User             @relation(fields: [userId], references: [id])
+  name           String
+  normalizedName String
+  position       Int
+  references     TagReference[]
+  transactions   TransactionTag[]
+  occurrences    OccurrenceTag[]
+  recurringRules RecurringTag[]
+
+  @@unique([userId, normalizedName])
+  @@index([userId, position])
+}
+
+model TagReference {
+  id    String @id
+  tagId String
+  tag   Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+}
+
+model TransactionTag {
+  transactionId Int
+  tagId         String
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([transactionId, tagId])
+  @@index([tagId])
+}
+
+model RecurringTag {
+  ruleId Int
+  tagId  String
+  rule   RecurringRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  tag    Tag           @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, tagId])
+  @@index([tagId])
+}
+
+model OccurrenceOverride {
+  ruleId      Int
+  date        DateTime
+  kind        String
+  amount      Int?
+  comment     String?
+  categoryId  Int?
+  category    Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  rule        RecurringRule   @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  processedAt DateTime?
+  tags        OccurrenceTag[]
+
+  @@id([ruleId, date])
+  @@index([categoryId])
+}
+
+model OccurrenceTag {
+  ruleId     Int
+  date       DateTime
+  tagId      String
+  occurrence OccurrenceOverride @relation(fields: [ruleId, date], references: [ruleId, date], onDelete: Cascade)
+  tag        Tag                @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, date, tagId])
+  @@index([tagId])
+}
+
+model Account {
+  isGoal         Boolean         @default(false)
+  targetAmount   Int?
+  id             String          @id
+  userId         Int
+  user           User            @relation(fields: [userId], references: [id])
+  name           String
+  openingBalance Int             @default(0)
+  isMain         Boolean         @default(false)
+  archived       Boolean         @default(false)
+  excludeFromTotalBalance Boolean @default(false)
+  transactions   Transaction[]
+  recurringRules RecurringRule[]
+  budgets        Budget[]
+  outgoing       Transfer[]      @relation("SourceAccount")
+  incoming       Transfer[]      @relation("DestinationAccount")
+
+  @@index([userId])
+}
+
+model Transfer {
+  id            String   @id
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id])
+  sourceId      String
+  source        Account  @relation("SourceAccount", fields: [sourceId], references: [id])
+  destinationId String
+  destination   Account  @relation("DestinationAccount", fields: [destinationId], references: [id])
+  amount        Int
+  date          DateTime
+  comment       String   @default("")
+  createdAt     DateTime @default(now())
+
+  @@index([userId, date])
+  @@index([userId, createdAt, id])
+  @@index([userId, sourceId])
+  @@index([userId, destinationId])
+}
+
+model FinancialReceipt {
+  userId   Int
+  user     User   @relation(fields: [userId], references: [id])
+  key      String
+  response String
+
+  @@id([userId, key])
+}
+
+model Favorite {
+  id         String   @id
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id])
+  name       String
+  type       String
+  amount     Int
+  comment    String   @default("")
+  categoryId Int
+  accountId  String
+  tagIds     String   @default("[]")
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model FinancialEdit {
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id])
+  key        String
+  editedAt   DateTime
+  mutationId String
+
+  @@id([userId, key])
+}
+
+model BalanceAdjustment {
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id])
+  id              String
+  accountId       String
+  accountName     String
+  kind            String
+  previousBalance Int
+  balance         Int
+  effectiveDate   DateTime
+  createdAt       DateTime
+
+  @@id([userId, id])
+  @@index([userId, createdAt, id])
+  @@index([userId, accountId, createdAt])
+  @@index([userId, effectiveDate])
+}

@@ -42,6 +42,7 @@ profileRouter.put('/profile', async (req: AuthRequest, res) => {
     defaultPeriod?: string
     firstDayOfWeek?: string
     decimalSeparator?: string
+    language?: string
   } = {}
 
   // Every field is optional, so the client can update one without sending the others.
@@ -84,6 +85,12 @@ profileRouter.put('/profile', async (req: AuthRequest, res) => {
       return res.status(400).json({ error: 'Decimal separator must be "." or ",".' })
     }
     data.decimalSeparator = req.body.decimalSeparator
+  }
+
+  if (req.body?.language !== undefined) {
+    if (req.body.language !== 'en' && req.body.language !== 'es')
+      return res.status(400).json({ error: 'Language must be en or es.' })
+    data.language = req.body.language
   }
 
   if (Object.keys(data).length === 0) {

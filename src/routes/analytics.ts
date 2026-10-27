@@ -190,6 +190,7 @@ analyticsRouter.get('/analytics', async (req: AuthRequest, res) => {
         : 0
       return {
         month: b.label,
+        monthStart: `${b.key}-01`,
         income: fromCents(b.income),
         expense: fromCents(b.expense),
         net: fromCents(b.income - b.expense),
@@ -197,7 +198,7 @@ analyticsRouter.get('/analytics', async (req: AuthRequest, res) => {
       }
     })
 
-    const trendData: { date: string; balance: number }[] = []
+    const trendData: { date: string; dateKey: string; balance: number }[] = []
     let balance = openingBalance
     for (let i = 0; i < days; i++) {
       const start = new Date(
@@ -205,6 +206,7 @@ analyticsRouter.get('/analytics', async (req: AuthRequest, res) => {
       )
       balance += netByDay.get(dayKey(start)) || 0
       trendData.push({
+        dateKey: dayKey(start),
         date: start.toLocaleDateString('en-US', {
           month: 'short',
           day: 'numeric',

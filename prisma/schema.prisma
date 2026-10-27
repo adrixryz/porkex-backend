@@ -23,6 +23,7 @@ model User {
   defaultPeriod      String              @default("week")
   firstDayOfWeek     String              @default("MONDAY")
   decimalSeparator   String              @default(".")
+  language           String              @default("en")
   accounts           Account[]
   financialEdits     FinancialEdit[]
   balanceAdjustments BalanceAdjustment[]

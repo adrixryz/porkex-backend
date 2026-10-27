@@ -111,9 +111,11 @@ await withServer('full-backup', async ctx => {
     currency: 'PEN',
     defaultPeriod: 'month',
     firstDayOfWeek: 'SUNDAY',
-    decimalSeparator: ','
+    decimalSeparator: ',',
+    language: 'es'
   })
   const backup = await request('GET', '/backup')
+  assert.equal(backup.profile.language, 'es')
   assert.equal(backup.tables.Transaction[0].amount, 1789)
   for (const table of Object.keys(backup.tables))
     assert.ok(backup.tables[table].length, `${table} must be covered`)
@@ -126,6 +128,7 @@ await withServer('full-backup', async ctx => {
   for (const row of legacy.tables.Account) delete row.excludeFromTotalBalance
   for (const row of legacy.tables.Category) delete row.position
   delete legacy.tables.RecurringTag
+  delete legacy.profile.language
   await request('POST', '/backup/preview', { backup: legacy })
   for (const table of ['Account', 'Category', 'Tag', 'Favorite']) {
     const duplicate = JSON.parse(JSON.stringify(backup))

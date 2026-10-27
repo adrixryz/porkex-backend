@@ -12,7 +12,8 @@ await withServer('preferences', async ({ call, check, state }) => {
     'register devuelve los defaults (week / MONDAY / .)',
     r.data.user.defaultPeriod === 'week' &&
       r.data.user.firstDayOfWeek === 'MONDAY' &&
-      r.data.user.decimalSeparator === '.',
+      r.data.user.decimalSeparator === '.' &&
+      r.data.user.language === 'en',
     JSON.stringify(r.data.user)
   )
   state.token = r.data.token
@@ -22,21 +23,24 @@ await withServer('preferences', async ({ call, check, state }) => {
     'GET /profile incluye las preferencias',
     r.data.defaultPeriod === 'week' &&
       r.data.firstDayOfWeek === 'MONDAY' &&
-      r.data.decimalSeparator === '.',
+      r.data.decimalSeparator === '.' &&
+      r.data.language === 'en',
     JSON.stringify(r.data)
   )
 
   r = await call('PUT', '/api/profile', {
     defaultPeriod: 'month',
     firstDayOfWeek: 'SUNDAY',
-    decimalSeparator: ','
+    decimalSeparator: ',',
+    language: 'es'
   })
   check(
     'PUT guarda las tres preferencias',
     r.status === 200 &&
       r.data.defaultPeriod === 'month' &&
       r.data.firstDayOfWeek === 'SUNDAY' &&
-      r.data.decimalSeparator === ',',
+      r.data.decimalSeparator === ',' &&
+      r.data.language === 'es',
     JSON.stringify(r.data?.error || r.data)
   )
   check('PUT solo preferencias no borra el nombre', r.data.name === 'Prefs', r.data.name)
@@ -46,7 +50,8 @@ await withServer('preferences', async ({ call, check, state }) => {
     'GET refleja lo guardado',
     r.data.defaultPeriod === 'month' &&
       r.data.firstDayOfWeek === 'SUNDAY' &&
-      r.data.decimalSeparator === ','
+      r.data.decimalSeparator === ',' &&
+      r.data.language === 'es'
   )
 
   // Each field is validated on its own.
@@ -60,13 +65,16 @@ await withServer('preferences', async ({ call, check, state }) => {
   check('día inventado → 400', r.status === 400, r.data?.error)
   r = await call('PUT', '/api/profile', { decimalSeparator: ';' })
   check('separador no soportado → 400', r.status === 400, r.data?.error)
+  r = await call('PUT', '/api/profile', { language: 'fr' })
+  check('idioma no soportado → 400', r.status === 400, r.data?.error)
 
   r = await call('GET', '/api/profile')
   check(
     'un 400 no toca lo guardado',
     r.data.defaultPeriod === 'month' &&
       r.data.firstDayOfWeek === 'SUNDAY' &&
-      r.data.decimalSeparator === ','
+      r.data.decimalSeparator === ',' &&
+      r.data.language === 'es'
   )
 
   // Like the currency, the preferences travel with the account.
@@ -77,7 +85,8 @@ await withServer('preferences', async ({ call, check, state }) => {
     r.status === 200 &&
       r.data.user.defaultPeriod === 'month' &&
       r.data.user.firstDayOfWeek === 'SUNDAY' &&
-      r.data.user.decimalSeparator === ',',
+      r.data.user.decimalSeparator === ',' &&
+      r.data.user.language === 'es',
     JSON.stringify(r.data.user)
   )
   state.token = r.data.token

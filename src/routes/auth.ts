@@ -104,7 +104,8 @@ router.post('/register', async (req, res) => {
         currency: user.currency,
         defaultPeriod: user.defaultPeriod,
         firstDayOfWeek: user.firstDayOfWeek,
-        decimalSeparator: user.decimalSeparator
+        decimalSeparator: user.decimalSeparator,
+        language: user.language
       }
     })
   } catch (error) {
@@ -149,7 +150,8 @@ router.post('/login', async (req, res) => {
         currency: user.currency,
         defaultPeriod: user.defaultPeriod,
         firstDayOfWeek: user.firstDayOfWeek,
-        decimalSeparator: user.decimalSeparator
+        decimalSeparator: user.decimalSeparator,
+        language: user.language
       }
     })
   } catch (error) {

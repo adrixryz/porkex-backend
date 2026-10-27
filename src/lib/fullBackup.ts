@@ -31,6 +31,7 @@ type Profile = {
   defaultPeriod: string
   firstDayOfWeek: string
   decimalSeparator: string
+  language: string
 }
 export interface FullBackup {
   format: 'porkex-full-backup'
@@ -44,7 +45,8 @@ const profileSelect = {
   currency: true,
   defaultPeriod: true,
   firstDayOfWeek: true,
-  decimalSeparator: true
+  decimalSeparator: true,
+  language: true
 } as const
 const model = (table: Table) => Prisma.dmmf.datamodel.models.find(item => item.name === table)!
 const fields = (table: Table) =>
@@ -163,7 +165,8 @@ export function validateFullBackup(value: unknown): FullBackup {
     !['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'].includes(
       p.firstDayOfWeek
     ) ||
-    !['.', ','].includes(p.decimalSeparator)
+    !['.', ','].includes(p.decimalSeparator) ||
+    !['en', 'es'].includes(p.language ?? 'en')
   )
     return invalid()
   const tables = {} as FullBackup['tables']
@@ -324,7 +327,8 @@ export function validateFullBackup(value: unknown): FullBackup {
       currency: p.currency,
       defaultPeriod: p.defaultPeriod,
       firstDayOfWeek: p.firstDayOfWeek,
-      decimalSeparator: p.decimalSeparator
+      decimalSeparator: p.decimalSeparator,
+      language: p.language ?? 'en'
     },
     tables
   }
