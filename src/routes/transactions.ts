@@ -6,6 +6,7 @@ import { transactionFilters } from '../lib/transactionFilters'
 import { tagInclude } from '../lib/tags'
 import { invalidateRecurring } from '../lib/recurring'
 import { dayKey, parseInstant } from '../lib/dates'
+import { fromCents } from '../lib/money'
 import { requireFunds, captureFunds, financialWrite, FinanceError } from '../lib/finance'
 import { Router } from 'express'
 import {
@@ -45,8 +46,8 @@ transactionsRouter.get('/transactions', async (req: AuthRequest, res) => {
     // The count and the page used to be two sequential round trips. They are
     // independent unless the requested page is past the end, because only then
     // does the clamped offset change the read.
-    const [total, firstPage, history] = await Promise.all([
-      prisma.transaction.count({ where }),
+    const [summary, firstPage, history] = await Promise.all([
+      prisma.transaction.aggregate({ where, _count: { _all: true }, _sum: { amount: true } }),
       prisma.transaction.findMany({
         where,
         include: { category: true, account: true, ...tagInclude },
@@ -58,6 +59,7 @@ transactionsRouter.get('/transactions', async (req: AuthRequest, res) => {
     ])
 
     // Clamp instead of returning an empty page beyond the last one.
+    const total = summary._count._all
     const totalPages = Math.max(1, Math.ceil(total / perPage))
     const page = Math.min(requestedPage, totalPages)
 
@@ -76,6 +78,7 @@ transactionsRouter.get('/transactions', async (req: AuthRequest, res) => {
     res.json({
       items: items.map(serializeTransaction),
       total,
+      totalAmount: fromCents(summary._sum.amount),
       page,
       perPage,
       totalPages,

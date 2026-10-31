@@ -119,6 +119,48 @@ export async function accountTransactionScope(
   }
   return { account, where }
 }
+
+async function affectedBalances(
+  userId: number,
+  ids: (string | null | undefined)[],
+  db: Prisma.TransactionClient
+) {
+  const main = ids.some(id => id == null) ? await mainAccount(userId, db) : null
+  const accountIds = [...new Set(ids.map(id => id ?? main!.id))]
+  const accounts = await db.account.findMany({ where: { userId, id: { in: accountIds } } })
+  if (accounts.length !== accountIds.length) throw new FinanceError('Account not found.', 404)
+  const mainId = accounts.find(account => account.isMain)?.id
+  const [movements, incoming, outgoing] = await Promise.all([
+    db.transaction.groupBy({
+      by: ['accountId', 'type'],
+      where: {
+        userId,
+        OR: [{ accountId: { in: accountIds } }, ...(mainId ? [{ accountId: null }] : [])]
+      },
+      _sum: { amount: true }
+    }),
+    db.transfer.groupBy({
+      by: ['destinationId'],
+      where: { userId, destinationId: { in: accountIds } },
+      _sum: { amount: true }
+    }),
+    db.transfer.groupBy({
+      by: ['sourceId'],
+      where: { userId, sourceId: { in: accountIds } },
+      _sum: { amount: true }
+    })
+  ])
+  const balances = new Map(accounts.map(account => [account.id, account.openingBalance]))
+  const add = (id: string, amount: number) => balances.set(id, balances.get(id)! + amount)
+  for (const movement of movements) {
+    const id = movement.accountId ?? mainId
+    if (id) add(id, (movement.type === 'Income' ? 1 : -1) * (movement._sum.amount ?? 0))
+  }
+  for (const transfer of incoming) add(transfer.destinationId, transfer._sum.amount ?? 0)
+  for (const transfer of outgoing) add(transfer.sourceId, -(transfer._sum.amount ?? 0))
+  return { accounts, balances }
+}
+
 /** Run inside the same write transaction as the mutation; failure rolls everything back. */
 export async function requireFunds(
   userId: number,
@@ -126,13 +168,12 @@ export async function requireFunds(
   db: Prisma.TransactionClient,
   previousFunds?: ReadonlyMap<string, number>
 ) {
-  for (const id of new Set(ids)) {
-    const actual = id ?? (await mainAccount(userId, db)).id
-    const funds = await balance(userId, actual, db)
-    const account = await db.account.findUnique({ where: { id: actual } })
-    if (account?.archived && funds !== 0)
+  const { accounts, balances } = await affectedBalances(userId, ids, db)
+  for (const account of accounts) {
+    const funds = balances.get(account.id)!
+    if (account.archived && funds !== 0)
       throw new FinanceError('Restore the archived account before changing its balance.', 409)
-    if (funds < 0 && funds < Math.min(0, previousFunds?.get(actual) ?? 0))
+    if (funds < 0 && funds < Math.min(0, previousFunds?.get(account.id) ?? 0))
       throw new FinanceError(
         'Insufficient funds. This change would leave an account with a negative balance.',
         409
@@ -146,11 +187,7 @@ export async function captureFunds(
   ids: (string | null | undefined)[],
   db: Prisma.TransactionClient
 ) {
-  const actualIds = new Set<string>()
-  for (const id of ids) actualIds.add(id ?? (await mainAccount(userId, db)).id)
-  return new Map(
-    await Promise.all([...actualIds].map(async id => [id, await balance(userId, id, db)] as const))
-  )
+  return (await affectedBalances(userId, ids, db)).balances
 }
 
 /** Checked inside the write transaction, with the same case-insensitive policy as categories. */

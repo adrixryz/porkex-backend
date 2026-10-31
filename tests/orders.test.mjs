@@ -61,9 +61,9 @@ await withServer('orders', async ({ call, check, state }) => {
   r = await call('GET', '/api/dashboard')
   const dash = r.data.recentTransactions.map(i => i.description)
   check(
-    'dashboard: recientes por fecha de registro desc',
+    'dashboard: recientes por fecha efectiva desc',
     dash.join(' | ') ===
-      'E - old date inserted last | C - recent date | B - mid date | A - old date',
+      'C - recent date | B - mid date | E - old date inserted last | A - old date',
     dash.join(' | ')
   )
 

@@ -4,6 +4,7 @@ import { fromCents } from '../lib/money'
 import { tagInclude } from '../lib/tags'
 import { dayKey } from '../lib/dates'
 import { FinanceError, accountTransactionScope, balance, totalBalance } from '../lib/finance'
+import { dashboardAccountScope } from '../lib/dashboardScope'
 import { Router } from 'express'
 import { serializeTransaction, resolveRange } from './apiShared'
 
@@ -12,7 +13,8 @@ export const dashboardRouter = Router()
 dashboardRouter.get('/dashboard', async (req: AuthRequest, res) => {
   const userId = req.userId!
   try {
-    const { account, where } = await accountTransactionScope(userId, req.query.accountId)
+    const { account, where: accountWhere } = await accountTransactionScope(userId, req.query.accountId)
+    const where = account ? accountWhere : { userId, OR: await dashboardAccountScope(userId) }
     const { range, error } = resolveRange(req.query as Record<string, unknown>)
     if (error) return res.status(400).json({ error })
     const periodWhere = { ...where, ...(range ? { date: range } : {}) }
@@ -21,7 +23,7 @@ dashboardRouter.get('/dashboard', async (req: AuthRequest, res) => {
         prisma.transaction.findMany({
           where: periodWhere,
           include: { category: true, account: true, ...tagInclude },
-          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          orderBy: [{ date: 'desc' }, { id: 'desc' }],
           take: 8
         }),
         prisma.transaction.groupBy({

@@ -18,6 +18,20 @@ await withServer('dashboard-accounts', async ctx => {
     categoryId: expense.id,
     amount: 5
   })
+  const excluded = randomUUID()
+  await ctx.call('POST', '/api/accounts', {
+    id: excluded,
+    name: 'Excluded account',
+    openingBalance: 40,
+    excludeFromTotalBalance: true
+  })
+  await ctx.call('POST', '/api/transactions', {
+    accountId: excluded,
+    type: 'Expense',
+    categoryId: expense.id,
+    amount: 7,
+    comment: 'Excluded expense'
+  })
   const summary = await ctx.call('GET', `/api/dashboard/summary?accountId=${cash}`)
   assert.deepEqual(summary.data, {
     globalBalance: 20,
@@ -29,6 +43,45 @@ await withServer('dashboard-accounts', async ctx => {
   assert.equal(global.data.globalBalance, 120)
   assert.equal(global.data.recentTransactions.length, 2)
   assert.equal(global.data.pieChartData[0].value, 5)
+  assert.equal(global.data.totalIncome, 100)
+  assert.equal(global.data.totalExpense, 5)
+  assert.equal(global.data.transactionCount, 2)
+  assert.ok(global.data.recentTransactions.every(row => row.comment !== 'Excluded expense'))
+  const selectedExcluded = await ctx.call('GET', `/api/dashboard?accountId=${excluded}`)
+  assert.equal(selectedExcluded.data.globalBalance, 33)
+  assert.equal(selectedExcluded.data.totalExpense, 7)
+  assert.equal(selectedExcluded.data.recentTransactions[0].comment, 'Excluded expense')
+
+  const mainBudget = await ctx.call('POST', '/api/budgets', {
+    categoryId: expense.id,
+    amount: 100,
+    period: 'MONTH'
+  })
+  const cashBudget = await ctx.call('POST', '/api/budgets', {
+    accountId: cash,
+    categoryId: expense.id,
+    amount: 100,
+    period: 'MONTH'
+  })
+  const excludedBudget = await ctx.call('POST', '/api/budgets', {
+    accountId: excluded,
+    categoryId: expense.id,
+    amount: 100,
+    period: 'MONTH'
+  })
+  assert.equal(mainBudget.status, 201)
+  assert.equal(cashBudget.status, 201)
+  assert.equal(excludedBudget.status, 201)
+  const dashboardBudgets = await ctx.call('GET', '/api/budgets?scope=dashboard&period=MONTH')
+  assert.deepEqual(
+    dashboardBudgets.data.budgets.map(budget => budget.id).sort(),
+    [mainBudget.data.id, cashBudget.data.id].sort()
+  )
+  const selectedBudgets = await ctx.call(
+    'GET',
+    `/api/budgets?accountId=${excluded}&period=MONTH`
+  )
+  assert.deepEqual(selectedBudgets.data.budgets.map(budget => budget.id), [excludedBudget.data.id])
   assert.equal((await ctx.call('GET', '/api/dashboard/summary?accountId=foreign')).status, 404)
-  ctx.check('Selected summaries isolate four indicators while dashboard sections stay global', true)
+  ctx.check('Dashboard Total excludes hidden accounts across lists, totals and budgets', true)
 })

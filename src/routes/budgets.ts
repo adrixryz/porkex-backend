@@ -3,6 +3,7 @@ import { AuthRequest } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { fromCents, toCents } from '../lib/money'
 import { isUniqueViolation } from '../lib/errors'
+import { dashboardAccountScope } from '../lib/dashboardScope'
 import {
   movementAccount,
   FinanceError,
@@ -40,11 +41,14 @@ budgetsRouter.get('/budgets', async (req: AuthRequest, res) => {
 
   try {
     // No period filter means all cycles, so each budget is measured on its own cycle.
-    const { account, where: accountWhere } = await accountTransactionScope(
+    const { account, where: selectedAccountWhere } = await accountTransactionScope(
       userId,
       req.query.accountId
     )
     const main = await mainAccount(userId)
+    const dashboardScope =
+      !account && req.query.scope === 'dashboard' ? await dashboardAccountScope(userId) : null
+    const accountWhere = dashboardScope ? { userId, OR: dashboardScope } : selectedAccountWhere
     const budgets = await prisma.budget.findMany({
       where: {
         userId,
@@ -53,7 +57,9 @@ budgetsRouter.get('/budgets', async (req: AuthRequest, res) => {
           ? account.isMain
             ? { OR: [{ accountId: account.id }, { accountId: null }] }
             : { accountId: account.id }
-          : {})
+          : dashboardScope
+            ? { OR: dashboardScope }
+            : {})
       },
       include: {
         account: { select: { id: true, name: true, archived: true } },

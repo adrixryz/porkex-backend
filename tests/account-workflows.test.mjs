@@ -49,7 +49,8 @@ await withServer('account-workflows', async ctx => {
   )
   const total = await call('GET', `/dashboard?from=${yesterday}&to=${date}`)
   assert.equal(total.recentTransactions.length, 8)
-  assert.equal(total.recentTransactions[0].id, recent.id)
+  assert.ok(total.recentTransactions.every(item => item.date.slice(0, 10) === date))
+  assert.ok(!total.recentTransactions.some(item => item.id === recent.id))
   assert.equal(total.totalIncome, 9)
   assert.equal(total.totalExpense, 10)
   assert.equal(total.globalBalance, 599)
@@ -64,7 +65,7 @@ await withServer('account-workflows', async ctx => {
   assert.deepEqual(today.pieChartData, [])
   await call('GET', '/dashboard?accountId=foreign', undefined, 404)
   ctx.check(
-    'Dashboard scopes period data, includes Cash in Total and caps latest registrations at eight',
+    'Dashboard scopes period data, includes Cash in Total and sorts its latest movements by effective date',
     true
   )
 

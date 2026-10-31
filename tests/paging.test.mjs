@@ -24,6 +24,11 @@ await withServer('paging', async ({ call, check, state, base }) => {
     r.data.total === 5 && r.data.totalPages === 3 && r.data.items.length === 2,
     `total=${r.data.total} pages=${r.data.totalPages}`
   )
+  check(
+    'totalAmount suma todos los movimientos filtrados, no solo la página visible',
+    r.data.totalAmount === 150,
+    `totalAmount=${r.data.totalAmount}`
+  )
 
   r = await call('GET', '/api/transactions?perPage=2&page=99')
   check(
@@ -63,7 +68,7 @@ await withServer('paging', async ({ call, check, state, base }) => {
   r = await call('GET', '/api/transactions?min=30&max=30')
   check(
     'min == max sigue siendo valido',
-    r.status === 200,
+    r.status === 200 && r.data.totalAmount === 30,
     `status=${r.status} total=${r.data.total}`
   )
 
